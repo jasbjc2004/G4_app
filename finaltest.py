@@ -1,19 +1,27 @@
-import os
+
+import random
 import sys
-import numpy as np
 import time
+import pandas as pd
+from fpdf import FPDF
+from enum import Enum
+
 from PySide6.QtWidgets import (
     QApplication, QVBoxLayout, QMainWindow, QWidget, QPushButton,
     QLineEdit, QLabel, QHBoxLayout, QDateEdit, QTextEdit, QMessageBox,
-    QComboBox, QToolBar, QStatusBar, QTabWidget
+    QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy, QInputDialog
 )
-from PySide6.QtGui import QAction
-from PySide6.QtCore import Qt, QDate, QSize, QTimer
+from PySide6.QtGui import QAction, QPainter, QColor
+from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from G4Track import get_frame_data, initialize_system
 from data_processing import calibration_to_center
+
+MAX_TRAILS = 21
+READ_SAMPLE = True
+MAX_ATTEMPTS = 10
 
 
 # StartUp window
@@ -65,7 +73,6 @@ class SetUp(QWidget):
 
         self.label = QLabel("Number of trials: ")
         self.combo_box.setCurrentIndex(9)
-        self.combo_box.currentIndexChanged.connect(self.update_label)
 
         trial_layout.addWidget(self.label)
         trial_layout.addWidget(self.combo_box)
@@ -109,9 +116,6 @@ class SetUp(QWidget):
 
         self.setLayout(main_layout)
 
-    def update_label(self):
-        selected_number = self.combo_box.currentData()
-
     # go to next window + save data
     def save_button_pressed(self):
         if self.name_input.text().strip() == "":
@@ -136,138 +140,200 @@ class SetUp(QWidget):
         self.close()
 
 
-# MainWindow
-class MainWindow(QMainWindow):
-    def __init__(self, num_trials):
-        super().__init__()
-        self.setWindowTitle("Sensors")
-        self.first_time = True
-        self.is_connected = False
-        self.dongle_id = None
-        self.hub_id = None
-        self.lindex = None
-        self.rindex = None
+class StatusDot(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._status = "disconnected"
+        self._status_colors = {
+            "connected": QColor("#2ecc71"),  # Green
+            "disconnected": QColor("#e74c3c"),  # Red
+            "connecting": QColor("#f1c40f"),  # Yellow
+            "no sensor": QColor("#A020F0") # Purple
+        }
+        self.setFixedSize(12, 12)
+
+    def sizeHint(self):
+        return QSize(12, 12)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Draw the outer circle (border)
+        painter.setPen(Qt.black)
+        painter.setBrush(self._status_colors.get(self._status, QColor("#e74c3c")))
+        painter.drawEllipse(1, 1, 10, 10)
+
+    @Property(str)
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, value):
+        if value in self._status_colors:
+            self._status = value
+            self.update()
+
+
+class StatusWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(5)
+
+        # Create status dot
+        self.status_dot = StatusDot()
+
+        # Create status label
+        self.status_label = QLabel("Disconnected")
+
+        # Add widgets to layout
+        self.layout.addWidget(self.status_dot)
+        self.layout.addWidget(self.status_label)
+
+    def set_status(self, status):
+        self.status_dot.status = status
+        status_texts = {
+            "connected": "Connected",
+            "disconnected": "Disconnected",
+            "connecting": "Connecting...",
+            "no sensor": "No sensor needed"
+        }
+        self.status_label.setText(status_texts.get(status, "Unknown"))
+
+
+class TrialState(Enum):
+    not_started = 0
+    running = 1
+    completed = 2
+
+
+# Tab window
+class TrailTab(QWidget):
+    def __init__(self, trail_number, parent=None):
+        super().__init__(parent)
+        self.trial_number = trail_number
         self.reading_active = False
+        self.start_time = None
+        self.trial_state = TrialState.not_started
 
-        # Menu bar
-        menu_bar = self.menuBar()
-        file_menu = menu_bar.addMenu("&File")
-        quit_action = file_menu.addAction("Quit")
-        quit_action.triggered.connect(self.close)
+        self.setup()
 
-        # test buttons
-        edit_menu = menu_bar.addMenu("Edit")
-        edit_menu.addAction("Copy")
-        edit_menu.addAction("Cut")
-        edit_menu.addAction("Paste")
-        edit_menu.addAction("Undo")
-        edit_menu.addAction("Redo")
+    def setup(self):
+        self.layout_tab = QHBoxLayout()
+        #self.layout_tab.setContentsMargins(10, 10, 10, 10)
+        self.setLayout(self.layout_tab)
 
-        menu_bar.addMenu("Window")
-        menu_bar.addMenu("Settings")
-        menu_bar.addMenu("&Help")
+        self.animation_widget = QWidget()
+        self.animation_layout = QVBoxLayout(self.animation_widget)
+        self.animation_widget.setLayout(self.animation_layout)
+        self.layout_tab.addWidget(self.animation_widget,2)
 
-        menu_bar.setNativeMenuBar(False)
+        self.setup_plot()
 
-        # Toolbar
-        toolbar = QToolBar("My main toolbar")
-        toolbar.setIconSize(QSize(16, 16))
-        self.addToolBar(toolbar)
+        self.notes_widget = QWidget()
+        self.notes_layout = QVBoxLayout(self.notes_widget)
+        self.notes_abel = QLabel("Notes:")
+        self.notes_input = QTextEdit()
+        self.notes_layout.addWidget(self.notes_label)
+        self.notes_layout.addWidget(self.notes_input)
+        self.layout_tab.addWidget(self.notes_widget,1)
 
-        toolbar.addAction(quit_action)
-        # test buttons
-        action1 = QAction("Some action", self)
-        action1.setStatusTip("Status message for some action")
-        action1.triggered.connect(self.toolbar_button_click)
-        toolbar.addAction(action1)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_plot)
+        self.timer.setInterval(20)
 
-        toolbar.addSeparator()
-        toolbar.addWidget(QPushButton("Click here"))
-
-        # Tabs = number of trials
-        tab_widget = QTabWidget(self)
-        tab = QWidget()
-        layout_tab = QVBoxLayout()
-
-        self.figure = Figure()
+    def setup_plot(self):
+        self.figure = Figure(constrained_layout=True)
         self.canvas = FigureCanvas(self.figure)
-        layout_tab.addWidget(self.canvas)
+        # gaat mss aangepast moeten worden afhankelijk van hoe de notepad eruit zit
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.ax = self.figure.add_subplot(111)
 
-        self.sensor_values = []
-        self.ax.set_title('Sensor Data Simulation')
+        self.ax.set_title(f'Trial {self.trial_number + 1} - Sensor Data')
         self.ax.set_xlabel('Time (s)')
-        self.ax.set_ylabel('Values')
-        self.reading = False
+        self.ax.set_ylabel('Coordinates (cm)')
+        self.ax.grid(True)
+
+        self.ax.set_ylim(0, 20)
+        self.ax.set_xlim(0, 10)
 
         self.xs = []
         self.y1s = []
         self.y2s = []
-        self.start_time = time.time()
 
-        self.line1, = self.ax.plot([], [], lw=2, label='left', color='blue')
-        self.line2, = self.ax.plot([], [], lw=2, label='right', color='orange')
+        self.line1, = self.ax.plot([], [], lw=2, label='Left', color='blue')
+        self.line2, = self.ax.plot([], [], lw=2, label='Right', color='orange')
         self.ax.legend()
 
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_plot)
-        self.timer.start(20)
+        self.layout_tab.addWidget(self.canvas)
+        self.figure.tight_layout()
 
-        # Buttons
-        button_layout = QHBoxLayout()
-        start_button = QPushButton("Start")
-        stop_button = QPushButton("Stop")
-        overwrite_button = QPushButton("Overwrite")
+    def start_reading(self):
+        if self.trial_state == TrialState.not_started:
+            if not self.start_time:
+                self.start_time = time.time()
 
-        button_layout.addWidget(start_button)
-        button_layout.addWidget(stop_button)
-        button_layout.addWidget(overwrite_button)
+            self.reading_active = True
+            self.trial_state = TrialState.running
+            self.timer.start()
+            main_window = self.window()
+            if isinstance(main_window, MainWindow):
+                main_window.update_toolbar()
 
-        layout_tab.addWidget(self.canvas)
-        layout_tab.addLayout(button_layout)
+    def stop_reading(self):
+        if self.trial_state == TrialState.running:
+            self.reading_active = False
+            self.timer.stop()
+            self.trial_state = TrialState.completed
+            main_window = self.window()
+            if isinstance(main_window, MainWindow):
+                main_window.update_toolbar()
 
-        tab.setLayout(layout_tab)
-        tab_widget.addTab(tab, f"Trial {1}")
+    def reset_reading(self):
+        if self.trial_state == TrialState.completed:
+            self.ax.set_ylim(0, 20)
+            self.ax.set_xlim(0, 10)
 
-        self.setCentralWidget(tab_widget)
+            self.xs = []
+            self.y1s = []
+            self.y2s = []
 
-        # Modified toolbar actions with better labels
-        self.connect_action = QAction("Connect", self)
-        self.connect_action.setStatusTip("Connect to sensors")
-        self.connect_action.triggered.connect(self.connecting)
-        toolbar.addAction(self.connect_action)
+            self.line1.set_data([], [])
+            self.line2.set_data([], [])
 
-        read = QAction("Start Reading", self)
-        read.setStatusTip("Start reading sensor data")
-        read.triggered.connect(self.start_reading)
-        toolbar.addAction(read)
+            self.canvas.draw()
 
-        stop = QAction("Stop Reading", self)
-        stop.setStatusTip("Stop reading sensor data")
-        stop.triggered.connect(self.stop_reading)
-        toolbar.addAction(stop)
-
-        # Status bar
-        self.setStatusBar(QStatusBar(self))
-
-    def toolbar_button_click(self):
-        self.statusBar().showMessage("Message from my app", 3000)
+            self.trial_state = TrialState.not_started
+            main_window = self.window()
+            if isinstance(main_window, MainWindow):
+                main_window.update_toolbar()
 
     def read_sensor_data(self):
-        if not self.is_connected:
-            return 0, 0, 0
-
         elapsed_time = time.time() - self.start_time
-        frame_data, active_count, data_hubs = get_frame_data(self.dongle_id, [self.hub_id])
 
-        y1 = frame_data.G4_sensor_per_hub[self.lindex].pos[1]
-        y2 = frame_data.G4_sensor_per_hub[self.rindex].pos[1]
-        return elapsed_time, abs(y1), abs(y2)
+        if not READ_SAMPLE:
+            main_window = self.window()
+
+            if isinstance(main_window, MainWindow):
+                if not main_window.is_connected:
+                    return 0, 0, 0
+
+            frame_data, active_count, data_hubs = get_frame_data(main_window.dongle_id, [main_window.hub_id])
+
+            pos1 = frame_data.G4_sensor_per_hub[main_window.lindex].pos
+            pos2 = frame_data.G4_sensor_per_hub[main_window.rindex].pos
+            return elapsed_time, [abs(x) for x in pos1], [abs(x) for x in pos2]
+        else:
+            return elapsed_time, [random.randint(0, 20)] * 3, [random.randint(0, 20)] * 3
 
     def update_plot(self):
-        if self.reading_active and self.is_connected:
+        if self.reading_active and self.trial_state == TrialState.running:
             # Read simulated data
             time_val, y1, y2 = self.read_sensor_data()
+
+            y1, y2 = y1[1], y2[1]
 
             # Update data lists
             self.xs.append(time_val)
@@ -292,54 +358,253 @@ class MainWindow(QMainWindow):
 
             # Redraw canvas
             self.canvas.draw()
-            self.canvas.flush_events()
 
-    def start_reading(self):
-        if not self.is_connected:
-            QMessageBox.warning(self, "Warning", "Please connect to sensors first!")
-            return
-        self.reading_active = True
-        self.start_time = time.time()  # Reset start time when starting to read
-        self.statusBar().showMessage("Reading sensor data...")
 
-    def stop_reading(self):
+# MainWindow
+class MainWindow(QMainWindow):
+    def __init__(self, num_trials):
+        super().__init__()
+        self.setWindowTitle("Sensors")
+
+        self.first_time = True
+        self.is_connected = False
+        self.dongle_id = None
+        self.hub_id = None
+        self.lindex = None
+        self.rindex = None
         self.reading_active = False
-        self.statusBar().showMessage("Sensor reading stopped")
+
+        self.resize(800, 600)
+        self.setup(num_trials)
+
+    def setup(self, num_trials):
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.main_layout = QVBoxLayout()
+        self.central_widget.setLayout(self.main_layout)
+
+        self.setup_menubar()
+        self.setup_toolbar()
+        self.setup_statusbar()
+
+        self.tab_widget = QTabWidget()
+        self.tab_widget.currentChanged.connect(self.tab_change_handler)
+        for i in range(0, num_trials):
+            tab = TrailTab(i, self.tab_widget)
+            self.tab_widget.addTab(tab, f"Trial {i + 1}")
+
+        self.main_layout.addWidget(self.tab_widget)
+        self.update_toolbar()
+
+    def tab_change_handler(self, index):
+        self.update_toolbar()
+
+    def setup_menubar(self):
+        menu_bar = self.menuBar()
+        file_menu = menu_bar.addMenu("&File")
+        save_action = file_menu.addAction("Save")
+        excel_action = file_menu.addAction("Export to Excel")
+        excel_action.triggered.connect(self.download_excel)
+        file_menu.addSeparator()
+        quit_action = file_menu.addAction("Quit")
+        quit_action.triggered.connect(self.close)
+
+        edit_menu = menu_bar.addMenu("Edit")
+        edit_menu.addAction("X(t)-plot")
+        edit_menu.addAction("Y(t)-plot")
+        edit_menu.addAction("Z(t)-plot")
+        edit_menu.addAction("V(t)-plot")
+
+        menu_bar.addMenu("Window")
+        menu_bar.addMenu("Settings")
+        menu_bar.addMenu("&Help")
+
+        menu_bar.setNativeMenuBar(False)
+
+    def setup_toolbar(self):
+        toolbar = QToolBar("My main toolbar")
+        toolbar.setIconSize(QSize(16, 16))
+        self.addToolBar(toolbar)
+        toolbar.setMovable(False)
+
+        self.connection_action = QAction("Connect", self)
+        if READ_SAMPLE:
+            self.connection_action.setEnabled(False)
+        self.connection_action.setStatusTip("Connect and calibrate the sensor")
+        self.connection_action.triggered.connect(lambda: self.connecting())
+        toolbar.addAction(self.connection_action)
+
+        self.calibrate_action = QAction("Calibrate", self)
+        self.calibrate_action.setEnabled(False)
+        self.calibrate_action.setStatusTip("Calibrate the sensor")
+        self.calibrate_action.triggered.connect(lambda: self.calibration())
+        self.calibrate_action.triggered(self.calibrate_message)
+        toolbar.addAction(self.calibrate_action)
+
+        toolbar.addSeparator()
+
+        self.start_action = QAction("Start trial", self)
+        self.start_action.setStatusTip("Start the current trial")
+        self.start_action.triggered.connect(lambda: self.start_current_reading())
+
+        self.stop_action = QAction("Stop trial", self)
+        self.stop_action.setStatusTip("Stop the current trial")
+        self.stop_action.setEnabled(False)
+        self.stop_action.triggered.connect(lambda: self.stop_current_reading())
+
+        self.reset_action = QAction("Overwrite trial", self)
+        self.reset_action.setStatusTip("Overwrite the current trial")
+        self.reset_action.setEnabled(False)
+        self.reset_action.triggered.connect(lambda: self.reset_current_reading())
+
+        toolbar.addActions([self.start_action, self.stop_action, self.reset_action])
+
+        toolbar.addSeparator()
+
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(self.close)
+        toolbar.addAction(quit_action)
+
+    def setup_statusbar(self):
+        self.statusbar = QStatusBar(self)
+        self.setStatusBar(self.statusbar)
+
+        self.status_widget = StatusWidget()
+        self.statusbar.addPermanentWidget(self.status_widget)
+        if READ_SAMPLE:
+            self.status_widget.set_status("no sensor")
+        else:
+            self.status_widget.set_status("disconnected")
+
+    def calibrate_message(self):
+        self.statusBar().showMessage("Calibrating the sensors...", 5000)
+
+    def get_tab(self):
+        tab = self.tab_widget.currentWidget()
+        if isinstance(tab, TrailTab):
+            return tab
+        return None
+
+    def update_toolbar(self):
+        tab = self.get_tab()
+
+        if tab is None or (not self.is_connected and not READ_SAMPLE):
+            self.start_action.setEnabled(False)
+            self.stop_action.setEnabled(False)
+            self.reset_action.setEnabled(False)
+            return
+
+        if tab.trial_state == TrialState.not_started:
+            self.start_action.setEnabled(True)
+            self.stop_action.setEnabled(False)
+            self.reset_action.setEnabled(False)
+        elif tab.trial_state == TrialState.running:
+            self.start_action.setEnabled(False)
+            self.stop_action.setEnabled(True)
+            self.reset_action.setEnabled(False)
+        elif tab.trial_state == TrialState.completed:
+            self.start_action.setEnabled(False)
+            self.stop_action.setEnabled(False)
+            self.reset_action.setEnabled(True)
+
+    def start_current_reading(self):
+        tab = self.get_tab()
+
+        if tab is not None:
+            tab.start_reading()
+            self.tab_widget.tabBar().setEnabled(False)
+
+    def stop_current_reading(self):
+        tab = self.get_tab()
+
+        if tab is not None:
+            tab.stop_reading()
+            self.tab_widget.tabBar().setEnabled(True)
+
+    def reset_current_reading(self):
+        tab = self.get_tab()
+
+        if tab is not None:
+            tab.reset_reading()
+            self.update_toolbar()
 
     def connecting(self):
         if self.is_connected:
             QMessageBox.information(self, "Info", "Already connected to sensors!")
             return
 
-        try:
-            file_directory = os.path.dirname(os.path.abspath(__file__))
-            src_cfg_file = os.path.join(file_directory, "first_calibration.g4c")
+        self.status_widget.set_status("connecting")
+        file_directory = os.path.dirname(os.path.abspath(__file__))
+        src_cfg_file = os.path.join(file_directory, "first_calibration.g4c")
 
-            connected = False
-            self.dongle_id = None
+        connected = False
+        self.dongle_id = None
 
-            # Add timeout to prevent infinite loop
-            max_attempts = 3
-            attempt = 0
+        # Add timeout to prevent infinite loop
+        attempt = 0
 
-            while self.dongle_id is None and attempt < max_attempts:
-                connected, self.dongle_id = initialize_system(src_cfg_file)
-                attempt += 1
+        while self.dongle_id is None and attempt < MAX_ATTEMPTS:
+            connected, self.dongle_id = initialize_system(src_cfg_file)
+            attempt += 1
 
-            if not connected or self.dongle_id is None:
-                QMessageBox.critical(self, "Error", "Failed to connect to sensors after multiple attempts!")
-                return
+        if not connected or self.dongle_id is None:
+            QMessageBox.critical(self, "Error", "Failed to connect to sensors after multiple attempts!")
+            self.status_widget.set_status("disconnected")
+            return
 
-            self.hub_id, self.lindex, self.rindex = calibration_to_center(self.dongle_id)
-            self.is_connected = True
-            self.connect_action.setEnabled(False)  # Disable connect button after successful connection
-            self.statusBar().showMessage("Successfully connected to sensors")
-            QMessageBox.information(self, "Success", "Successfully connected to sensors!")
+        self.hub_id, self.lindex, self.rindex = calibration_to_center(self.dongle_id)
+        self.is_connected = True
+        self.connection_action.setEnabled(False)  # Disable connect button after successful connection
+        self.calibrate_action.setEnabled(True)
+        self.statusBar().showMessage("Successfully connected to sensors")
+        QMessageBox.information(self, "Success", "Successfully connected to sensors!")
+        self.status_widget.set_status("connected")
+        self.update_toolbar()
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error connecting to sensors: {str(e)}")
-            self.is_connected = False
+    def calibration(self):
+        self.hub_id, self.lindex, self.rindex = calibration_to_center(self.dongle_id)
 
+    def download_excel(self):
+
+        participant_code, ok = QInputDialog.getText(self, "Participant Code", "Enter the participant code:")
+        if not ok or not participant_code.strip():
+            QMessageBox.warning(self, "Warning", "Participant code is required!")
+            return
+
+        participant_folder = os.path.join(os.getcwd(), participant_code)
+        os.makedirs(participant_folder, exist_ok=True)
+
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+
+        for i in range(self.tab_widget.count()+1):
+            tab = self.tab_widget.widget(i)
+
+            # Generate Excel for each tab
+            data = {
+                "Time (s)": tab.xs,
+                "Left Sensor (cm)": tab.y1s,
+                "Right Sensor (cm)": tab.y2s,
+            }
+            df = pd.DataFrame(data)
+            trial_file = os.path.join(participant_folder, f"trial_{i + 1}.xlsx")
+            df.to_excel(trial_file, index=False)
+
+            # Add notes to the PDF
+            pdf.set_font("Arial", style="B", size=14)
+            pdf.cell(0, 10, f"Trial {i + 1}", ln=True)
+            pdf.set_font("Arial", size=12)
+            notes = tab.notes_input.toPlainText().strip()
+            pdf.multi_cell(0, 10, notes if notes else "No Notes")
+            pdf.ln(5)  # Add spacing
+
+        # Save the PDF
+        pdf_file = os.path.join(participant_folder, f"{participant_code}.pdf")
+        pdf.output(pdf_file)
+
+        QMessageBox.information(self, "Success", f"Data saved in folder: {participant_folder}")
 
 app = QApplication(sys.argv)
 startup = StartUp()
