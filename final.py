@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from G4Track import get_frame_data, initialize_system, set_units
+from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
 from data_processing import calibration_to_center
 
 MAX_TRAILS = 21
@@ -412,7 +412,7 @@ class TrailTab(QWidget):
             # Read simulated data
             time_val, lpos, rpos = self.read_sensor_data()
 
-            if len(self.line1.get_xdata()) == 0:
+            if len(self.log_left_plot) > 0:
                 vl, vr = sqrt(((lpos[0] - self.log_left_plot[-1][0]) / (time_val - self.xs[- 1])) ** 2 +
                               ((lpos[1] - self.log_left_plot[-1][1]) / (time_val - self.xs[-1])) ** 2 +
                               ((lpos[2] - self.log_left_plot[-1][2]) / (time_val - self.xs[-1])) ** 2), \
@@ -669,6 +669,15 @@ class MainWindow(QMainWindow):
         if not connected or self.dongle_id is None:
             QMessageBox.critical(self, "Error", "Failed to connect to sensors after multiple attempts!")
             self.status_widget.set_status("disconnected")
+            return
+
+        try:
+            get_active_hubs(self.dongle_id, True)[0]
+        except:
+            QMessageBox.critical(self, "Error", "Failed to connect to hubs! Please check if they are online")
+            self.status_widget.set_status("disconnected")
+            connected = False
+            self.dongle_id = None
             return
 
         set_units(self.dongle_id)
