@@ -23,6 +23,7 @@ from data_processing import calibration_to_center
 
 MAX_TRAILS = 21
 READ_SAMPLE = True
+BEAUTY_SPEED = True
 MAX_ATTEMPTS = 10
 
 
@@ -239,7 +240,7 @@ class TrailTab(QWidget):
         self.animation_layout = QVBoxLayout(self.animation_widget)
         self.animation_widget.setLayout(self.animation_layout)
         self.layout_tab.addWidget(self.animation_widget)
-        self.layout_tab.setStretch(2,1)
+        self.layout_tab.setStretch(2, 1)
 
         self.setup_plot()
 
@@ -250,7 +251,7 @@ class TrailTab(QWidget):
         self.notes_layout.addWidget(self.notes_label)
         self.notes_layout.addWidget(self.notes_input)
         self.layout_tab.addWidget(self.notes_widget)
-        self.layout_tab.setStretch(1,1)
+        self.layout_tab.setStretch(1, 1)
 
         self.animation_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -272,7 +273,7 @@ class TrailTab(QWidget):
         self.ax.set_ylabel('Velocity (cm/s)')
         self.ax.grid(True)
 
-        self.ax.set_ylim(0, 20)
+        self.ax.set_ylim(0, 10)
         self.ax.set_xlim(0, 10)
 
         self.line1, = self.ax.plot([], [], lw=2, label='Left', color='blue')
@@ -305,7 +306,7 @@ class TrailTab(QWidget):
 
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
-            self.ax.set_ylim(0, 20)
+            self.ax.set_ylim(0, 10)
             self.ax.set_xlim(0, 10)
 
             self.pos_left = [0, 0, 0]
@@ -343,12 +344,22 @@ class TrailTab(QWidget):
             pos2 = frame_data.G4_sensor_per_hub[main_window.rindex].pos
 
             if tuple(pos1) == (0, 0, 0) or tuple(pos2) == (0, 0, 0):
-                return elapsed_time, [abs(x) for x in self.pos_left], [abs(x) for x in self.pos_right]
+                return elapsed_time, [x for x in self.pos_left], [x for x in self.pos_right]
 
             self.pos_left = pos1
             self.pos_right = pos2
 
             return elapsed_time, pos1, pos2
+        elif BEAUTY_SPEED:
+            if elapsed_time < 5:
+                return elapsed_time, [0, 0, -elapsed_time], [0, elapsed_time, 0]
+            elif elapsed_time < 10:
+                return elapsed_time, [0, 0, -5 + (elapsed_time - 5)], [0, 5 - (elapsed_time - 5), 0]
+            elif (elapsed_time < 15):
+                return elapsed_time, [0, 0, -5 * (elapsed_time - 10)], [0, 5 * (elapsed_time - 10), 0]
+            elif (elapsed_time < 20):
+                return elapsed_time, [0, 0, -25+5 * (elapsed_time - 15)], [0, 25-5 * (elapsed_time - 15), 0]
+            return elapsed_time, [0] * 3, [0] * 3
         else:
             return elapsed_time, [random.randint(0, 20)] * 3, [random.randint(0, 20)] * 3
 
@@ -378,20 +389,20 @@ class TrailTab(QWidget):
                 self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
                 self.ax.set_ylabel('Velocity (cm/s)')
 
-                self.plot_left_data = [sqrt(pos[0] ** 2 + pos[1] ** 2 + pos[2] ** 2) for pos in self.log_left_plot]
-                self.plot_right_data = [sqrt(pos[0] ** 2 + pos[1] ** 2 + pos[2] ** 2) for pos in self.log_right_plot]
+                self.plot_left_data = [pos[4] for pos in self.log_left_plot]
+                self.plot_right_data = [pos[4] for pos in self.log_right_plot]
 
-        self.line1.set_xdata(self.xs[-200:])
-        self.line1.set_ydata(self.plot_left_data[-200:])
-        self.line2.set_xdata(self.xs[-200:])
-        self.line2.set_ydata(self.plot_right_data[-200:])
+        self.line1.set_xdata(self.xs)
+        self.line1.set_ydata(self.plot_left_data)
+        self.line2.set_xdata(self.xs)
+        self.line2.set_ydata(self.plot_right_data)
 
-        if self.xs:  # Only adjust if there's data
-            self.ax.set_xlim(min(self.xs[-200:]), max(self.xs[-200:]) + 1)
-            if (max(max(self.plot_left_data[-200:], default=1),
-                    max(self.plot_right_data[-200:], default=1)) * 1.1) > 10:
-                self.ax.set_ylim(0, max(max(self.plot_left_data[-200:], default=1),
-                                        max(self.plot_right_data[-200:], default=1)) * 1.1)
+        self.ax.set_xlim(0, self.xs[-1] + 1)
+        self.ax.set_ylim(0, 10)
+        if (max(max(self.plot_left_data[-200:], default=1),
+                max(self.plot_right_data[-200:], default=1)) * 1.1) > 10:
+            self.ax.set_ylim(0, max(max(self.plot_left_data[-200:], default=1),
+                                    max(self.plot_right_data[-200:], default=1)) * 1.1)
 
         # Redraw canvas
         self.canvas.draw()
@@ -400,6 +411,16 @@ class TrailTab(QWidget):
         if self.reading_active and self.trial_state == TrialState.running:
             # Read simulated data
             time_val, lpos, rpos = self.read_sensor_data()
+
+            if len(self.line1.get_xdata()) == 0:
+                vl, vr = sqrt(((lpos[0] - self.log_left_plot[-1][0]) / (time_val - self.xs[- 1])) ** 2 +
+                              ((lpos[1] - self.log_left_plot[-1][1]) / (time_val - self.xs[-1])) ** 2 +
+                              ((lpos[2] - self.log_left_plot[-1][2]) / (time_val - self.xs[-1])) ** 2), \
+                         sqrt(((rpos[0] - self.log_right_plot[-1][0]) / (time_val - self.xs[-1])) ** 2 +
+                              ((rpos[1] - self.log_right_plot[-1][1]) / (time_val - self.xs[-1])) ** 2 +
+                              ((rpos[2] - self.log_right_plot[-1][2]) / (time_val - self.xs[-1])) ** 2)
+            else:
+                vl, vr = 0, 0
 
             y1, y2 = 0, 0
             main_window = self.window()
@@ -411,11 +432,12 @@ class TrailTab(QWidget):
                 elif main_window.zt:
                     y1, y2 = -lpos[2], -rpos[2]
                 else:
-                    y1, y2 = sqrt((lpos[0]) ** 2 + lpos[1] ** 2 + lpos[2] ** 2), sqrt(
-                        (rpos[0]) ** 2 + rpos[1] ** 2 + rpos[2] ** 2)
+                    y1, y2 = vl, vr
 
             # Update data lists
             self.xs.append(time_val)
+            lpos.append(vl)
+            rpos.append(vr)
             self.log_left_plot.append(list(lpos))
             self.log_right_plot.append(list(rpos))
 
@@ -423,16 +445,18 @@ class TrailTab(QWidget):
             self.plot_right_data.append(y2)
 
             # Update plot
-            self.line1.set_xdata(self.xs[-200:])
-            self.line1.set_ydata(self.plot_left_data[-200:])
-            self.line2.set_xdata(self.xs[-200:])
-            self.line2.set_ydata(self.plot_right_data[-200:])
+            self.line1.set_xdata(self.xs)
+            self.line1.set_ydata(self.plot_left_data)
+            self.line2.set_xdata(self.xs)
+            self.line2.set_ydata(self.plot_right_data)
 
             # Adjust axes
             if self.xs:  # Only adjust if there's data
-                self.ax.set_xlim(min(self.xs[-200:]), max(self.xs[-200:]) + 1)
-                if (max(max(self.plot_left_data[-200:], default=1), max(self.plot_right_data[-200:], default=1)) * 1.1) > 10:
-                    self.ax.set_ylim(0, max(max(self.plot_left_data[-200:], default=1), max(self.plot_right_data[-200:], default=1)) * 1.1)
+                self.ax.set_xlim(0, self.xs[-1] + 1)
+                if (max(max(self.plot_left_data[-200:], default=1),
+                        max(self.plot_right_data[-200:], default=1)) * 1.1) > 10:
+                    self.ax.set_ylim(0, max(max(self.plot_left_data[-200:], default=1),
+                                            max(self.plot_right_data[-200:], default=1)) * 1.1)
 
             # Redraw canvas
             self.canvas.draw()
@@ -459,6 +483,7 @@ class MainWindow(QMainWindow):
 
         self.resize(800, 600)
         self.setup(num_trials)
+        self.num_trials = num_trials
 
     def setup(self, num_trials):
         self.central_widget = QWidget()
@@ -487,6 +512,8 @@ class MainWindow(QMainWindow):
         file_menu = menu_bar.addMenu("&File")
         excel_action = file_menu.addAction("Export to Excel")
         excel_action.triggered.connect(self.download_excel)
+        tab_extra = file_menu.addAction("Add extra tab")
+        tab_extra.triggered.connect(self.add_another_tab)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("Quit")
         quit_action.triggered.connect(self.close)
@@ -571,6 +598,11 @@ class MainWindow(QMainWindow):
             return tab
         return None
 
+    def add_another_tab(self):
+        tab = TrailTab(self.num_trials, self.tab_widget)
+        self.tab_widget.addTab(tab, f"Trial {self.num_trials + 1}")
+        self.num_trials += 1
+
     def update_toolbar(self):
         tab = self.get_tab()
 
@@ -620,6 +652,7 @@ class MainWindow(QMainWindow):
             return
 
         self.status_widget.set_status("connecting")
+        self.repaint()
         file_directory = os.path.dirname(os.path.abspath(__file__))
         src_cfg_file = os.path.join(file_directory, "first_calibration.g4c")
 
@@ -688,7 +721,6 @@ class MainWindow(QMainWindow):
         self.get_tab().update_axis()
 
     def download_excel(self):
-
         participant_code, ok = QInputDialog.getText(self, "Participant Code", "Enter the participant code:")
         if not ok or not participant_code.strip():
             QMessageBox.warning(self, "Warning", "Participant code is required!")
@@ -714,8 +746,12 @@ class MainWindow(QMainWindow):
             if isinstance(tab, TrailTab):
                 data = {
                     "Time (s)": tab.xs,
-                    "Left Sensor (cm)": tab.y1s,
-                    "Right Sensor (cm)": tab.y2s,
+                    "Left Sensor x (cm)": tab.log_left_plot[0],
+                    "Left Sensor y (cm)": tab.log_left_plot[1],
+                    "Left Sensor z (cm)": tab.log_left_plot[2],
+                    "Right Sensor x (cm)": tab.log_right_plot[0],
+                    "Right Sensor y (cm)": tab.log_right_plot[1],
+                    "Right Sensor z (cm)": tab.log_right_plot[2]
                 }
                 df = pd.DataFrame(data)
             trial_file = os.path.join(participant_folder, f"trial_{i + 1}.xlsx")
