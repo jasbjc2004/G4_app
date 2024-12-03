@@ -1,7 +1,10 @@
-
+import io
+import os
 import random
 import sys
 import time
+from math import sqrt
+
 import pandas as pd
 from fpdf import FPDF
 from enum import Enum
@@ -9,18 +12,20 @@ from enum import Enum
 from PySide6.QtWidgets import (
     QApplication, QVBoxLayout, QMainWindow, QWidget, QPushButton,
     QLineEdit, QLabel, QHBoxLayout, QDateEdit, QTextEdit, QMessageBox,
-    QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy, QInputDialog
+    QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy, QInputDialog,
+    QFileDialog, QDialog, QProgressDialog
 )
 from PySide6.QtGui import QAction, QPainter, QColor
-from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property
+from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property, QSettings
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from G4Track import get_frame_data, initialize_system
+from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
 from data_processing import calibration_to_center
 
 MAX_TRAILS = 21
 READ_SAMPLE = True
+BEAUTY_SPEED = True
 MAX_ATTEMPTS = 10
 
 
@@ -49,10 +54,15 @@ class StartUp(QWidget):
 
 
 # SetUp window
-class SetUp(QWidget):
+class SetUp(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Project Setup")
+        self.setWindowTitle("Project Settings")
+
+        self.settings = QSettings("PNO", "GUIsensor")
+
+        self.settings.value("additional notes", "")
+
 
         main_layout = QVBoxLayout()
 
@@ -93,8 +103,16 @@ class SetUp(QWidget):
         notes_layout.addWidget(notes_label)
         notes_layout.addWidget(self.notes_input)
 
+        #assessor
+        assessor_layout = QHBoxLayout()
+        assessor_label = QLabel("Assessor:            ")
+        self.assessor_input = QLineEdit()
+        assessor_layout.addWidget(assessor_label)
+        assessor_layout.addWidget(self.assessor_input)
+
         # Add widgets to the form layout
         form_layout.addLayout(name_layout)
+        form_layout.addLayout(assessor_layout)
         form_layout.addLayout(date_layout)
         form_layout.addLayout(trial_layout)
         form_layout.addLayout(notes_layout)
@@ -148,7 +166,7 @@ class StatusDot(QWidget):
             "connected": QColor("#2ecc71"),  # Green
             "disconnected": QColor("#e74c3c"),  # Red
             "connecting": QColor("#f1c40f"),  # Yellow
-            "no sensor": QColor("#A020F0") # Purple
+            "no sensor": QColor("#A020F0")  # Purple
         }
         self.setFixedSize(12, 12)
 
@@ -218,27 +236,41 @@ class TrailTab(QWidget):
         self.start_time = None
         self.trial_state = TrialState.not_started
 
+        self.pos_left = [0, 0, 0]
+        self.pos_right = [0, 0, 0]
+        self.xs = []
+        self.log_left_plot = []
+        self.log_right_plot = []
+
+        self.plot_left_data = []
+        self.plot_right_data = []
+
         self.setup()
 
     def setup(self):
         self.layout_tab = QHBoxLayout()
-        #self.layout_tab.setContentsMargins(10, 10, 10, 10)
         self.setLayout(self.layout_tab)
 
         self.animation_widget = QWidget()
         self.animation_layout = QVBoxLayout(self.animation_widget)
         self.animation_widget.setLayout(self.animation_layout)
-        self.layout_tab.addWidget(self.animation_widget,2)
+        self.layout_tab.addWidget(self.animation_widget)
+        self.layout_tab.setStretch(2, 1)
 
         self.setup_plot()
 
         self.notes_widget = QWidget()
         self.notes_layout = QVBoxLayout(self.notes_widget)
-        self.notes_abel = QLabel("Notes:")
+        self.notes_label = QLabel("Notes:")
         self.notes_input = QTextEdit()
         self.notes_layout.addWidget(self.notes_label)
         self.notes_layout.addWidget(self.notes_input)
-        self.layout_tab.addWidget(self.notes_widget,1)
+        self.layout_tab.addWidget(self.notes_widget)
+        self.layout_tab.setStretch(1, 1)
+
+        self.animation_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_plot)
@@ -251,17 +283,13 @@ class TrailTab(QWidget):
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.ax = self.figure.add_subplot(111)
 
-        self.ax.set_title(f'Trial {self.trial_number + 1} - Sensor Data')
+        self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
         self.ax.set_xlabel('Time (s)')
-        self.ax.set_ylabel('Coordinates (cm)')
+        self.ax.set_ylabel('Velocity (cm/s)')
         self.ax.grid(True)
 
-        self.ax.set_ylim(0, 20)
+        self.ax.set_ylim(0, 10)
         self.ax.set_xlim(0, 10)
-
-        self.xs = []
-        self.y1s = []
-        self.y2s = []
 
         self.line1, = self.ax.plot([], [], lw=2, label='Left', color='blue')
         self.line2, = self.ax.plot([], [], lw=2, label='Right', color='orange')
@@ -293,12 +321,17 @@ class TrailTab(QWidget):
 
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
-            self.ax.set_ylim(0, 20)
+            self.ax.set_ylim(0, 10)
             self.ax.set_xlim(0, 10)
 
+            self.pos_left = [0, 0, 0]
+            self.pos_right = [0, 0, 0]
             self.xs = []
-            self.y1s = []
-            self.y2s = []
+            self.log_left_plot = []
+            self.log_right_plot = []
+
+            self.plot_left_data = []
+            self.plot_right_data = []
 
             self.line1.set_data([], [])
             self.line2.set_data([], [])
@@ -309,6 +342,8 @@ class TrailTab(QWidget):
             main_window = self.window()
             if isinstance(main_window, MainWindow):
                 main_window.update_toolbar()
+
+            self.start_time = None
 
     def read_sensor_data(self):
         elapsed_time = time.time() - self.start_time
@@ -324,37 +359,121 @@ class TrailTab(QWidget):
 
             pos1 = frame_data.G4_sensor_per_hub[main_window.lindex].pos
             pos2 = frame_data.G4_sensor_per_hub[main_window.rindex].pos
-            return elapsed_time, [abs(x) for x in pos1], [abs(x) for x in pos2]
+
+            if tuple(pos1) == (0, 0, 0) or tuple(pos2) == (0, 0, 0):
+                return elapsed_time, [x for x in self.pos_left], [x for x in self.pos_right]
+
+            self.pos_left = pos1
+            self.pos_right = pos2
+
+            return elapsed_time, pos1, pos2
+        elif BEAUTY_SPEED:
+            if elapsed_time < 5:
+                return elapsed_time, [0, 0, -elapsed_time], [0, elapsed_time, 0]
+            elif elapsed_time < 10:
+                return elapsed_time, [0, 0, -5 + (elapsed_time - 5)], [0, 5 - (elapsed_time - 5), 0]
+            elif (elapsed_time < 15):
+                return elapsed_time, [0, 0, -5 * (elapsed_time - 10)], [0, 5 * (elapsed_time - 10), 0]
+            elif (elapsed_time < 20):
+                return elapsed_time, [0, 0, -25+5 * (elapsed_time - 15)], [0, 25-5 * (elapsed_time - 15), 0]
+            return elapsed_time, [0] * 3, [0] * 3
         else:
             return elapsed_time, [random.randint(0, 20)] * 3, [random.randint(0, 20)] * 3
+
+    def update_axis(self):
+        main_window = self.window()
+
+        if isinstance(main_window, MainWindow):
+            if main_window.xt:
+                self.ax.set_title(f'Trial {self.trial_number + 1} - x-coordinates')
+                self.ax.set_ylabel('X-coordinates (cm)')
+
+                self.plot_left_data = [abs(pos[0]) for pos in self.log_left_plot]
+                self.plot_right_data = [pos[0] for pos in self.log_right_plot]
+            elif main_window.yt:
+                self.ax.set_title(f'Trial {self.trial_number + 1} - y-coordinates')
+                self.ax.set_ylabel('Y-coordinates (cm)')
+
+                self.plot_left_data = [pos[1] for pos in self.log_left_plot]
+                self.plot_right_data = [pos[1] for pos in self.log_right_plot]
+            elif main_window.zt:
+                self.ax.set_title(f'Trial {self.trial_number + 1} - z-coordinates')
+                self.ax.set_ylabel('Z-coordinates (cm)')
+
+                self.plot_left_data = [-pos[2] for pos in self.log_left_plot]
+                self.plot_right_data = [-pos[2] for pos in self.log_right_plot]
+            else:
+                self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
+                self.ax.set_ylabel('Velocity (cm/s)')
+
+                self.plot_left_data = [pos[3] for pos in self.log_left_plot]
+                self.plot_right_data = [pos[3] for pos in self.log_right_plot]
+
+        self.line1.set_xdata(self.xs)
+        self.line1.set_ydata(self.plot_left_data)
+        self.line2.set_xdata(self.xs)
+        self.line2.set_ydata(self.plot_right_data)
+
+        self.ax.set_xlim(0, self.xs[-1] + 1)
+        self.ax.set_ylim(0, 10)
+        if (max(max(self.plot_left_data[-200:], default=1),
+                max(self.plot_right_data[-200:], default=1)) * 1.1) > 10:
+            self.ax.set_ylim(0, max(max(self.plot_left_data[-200:], default=1),
+                                    max(self.plot_right_data[-200:], default=1)) * 1.1)
+
+        # Redraw canvas
+        self.canvas.draw()
 
     def update_plot(self):
         if self.reading_active and self.trial_state == TrialState.running:
             # Read simulated data
-            time_val, y1, y2 = self.read_sensor_data()
+            time_val, lpos, rpos = self.read_sensor_data()
 
-            y1, y2 = y1[1], y2[1]
+            if len(self.log_left_plot) > 0:
+                vl, vr = sqrt(((lpos[0] - self.log_left_plot[-1][0]) / (time_val - self.xs[- 1])) ** 2 +
+                              ((lpos[1] - self.log_left_plot[-1][1]) / (time_val - self.xs[-1])) ** 2 +
+                              ((lpos[2] - self.log_left_plot[-1][2]) / (time_val - self.xs[-1])) ** 2), \
+                         sqrt(((rpos[0] - self.log_right_plot[-1][0]) / (time_val - self.xs[-1])) ** 2 +
+                              ((rpos[1] - self.log_right_plot[-1][1]) / (time_val - self.xs[-1])) ** 2 +
+                              ((rpos[2] - self.log_right_plot[-1][2]) / (time_val - self.xs[-1])) ** 2)
+            else:
+                vl, vr = 0, 0
+
+            y1, y2 = 0, 0
+            main_window = self.window()
+            if isinstance(main_window, MainWindow):
+                if main_window.xt:
+                    y1, y2 = -lpos[0], rpos[0]
+                elif main_window.yt:
+                    y1, y2 = lpos[1], rpos[1]
+                elif main_window.zt:
+                    y1, y2 = -lpos[2], -rpos[2]
+                else:
+                    y1, y2 = vl, vr
 
             # Update data lists
             self.xs.append(time_val)
-            self.y1s.append(y1)
-            self.y2s.append(y2)
+            lpos.append(vl)
+            rpos.append(vr)
+            self.log_left_plot.append(list(lpos))
+            self.log_right_plot.append(list(rpos))
 
-            # Keep only last 200 points
-            self.xs = self.xs[-200:]
-            self.y1s = self.y1s[-200:]
-            self.y2s = self.y2s[-200:]
+            self.plot_left_data.append(y1)
+            self.plot_right_data.append(y2)
 
             # Update plot
             self.line1.set_xdata(self.xs)
-            self.line1.set_ydata(self.y1s)
+            self.line1.set_ydata(self.plot_left_data)
             self.line2.set_xdata(self.xs)
-            self.line2.set_ydata(self.y2s)
+            self.line2.set_ydata(self.plot_right_data)
 
             # Adjust axes
             if self.xs:  # Only adjust if there's data
-                self.ax.set_xlim(min(self.xs), max(self.xs) + 1)
-                self.ax.set_ylim(0, max(max(self.y1s, default=1), max(self.y2s, default=1)) * 1.1)
+                self.ax.set_xlim(0, self.xs[-1] + 1)
+                if (max(max(self.plot_left_data[-200:], default=1),
+                        max(self.plot_right_data[-200:], default=1)) * 1.1) > 10:
+                    self.ax.set_ylim(0, max(max(self.plot_left_data[-200:], default=1),
+                                            max(self.plot_right_data[-200:], default=1)) * 1.1)
 
             # Redraw canvas
             self.canvas.draw()
@@ -374,8 +493,14 @@ class MainWindow(QMainWindow):
         self.rindex = None
         self.reading_active = False
 
+        self.xt = False
+        self.yt = False
+        self.zt = False
+        self.vt = True
+
         self.resize(800, 600)
         self.setup(num_trials)
+        self.num_trials = num_trials
 
     def setup(self, num_trials):
         self.central_widget = QWidget()
@@ -402,18 +527,23 @@ class MainWindow(QMainWindow):
     def setup_menubar(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
-        save_action = file_menu.addAction("Save")
         excel_action = file_menu.addAction("Export to Excel")
         excel_action.triggered.connect(self.download_excel)
+        tab_extra = file_menu.addAction("Add extra tab")
+        tab_extra.triggered.connect(self.add_another_tab)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("Quit")
         quit_action.triggered.connect(self.close)
 
-        edit_menu = menu_bar.addMenu("Edit")
-        edit_menu.addAction("X(t)-plot")
-        edit_menu.addAction("Y(t)-plot")
-        edit_menu.addAction("Z(t)-plot")
-        edit_menu.addAction("V(t)-plot")
+        edit_menu = menu_bar.addMenu("Plot")
+        xt_action = edit_menu.addAction("x(t)-plot")
+        xt_action.triggered.connect(self.xt_plot)
+        yt_action = edit_menu.addAction("y(t)-plot")
+        yt_action.triggered.connect(self.yt_plot)
+        zt_action = edit_menu.addAction("z(t)-plot")
+        zt_action.triggered.connect(self.zt_plot)
+        vt_action = edit_menu.addAction("v(t)-plot")
+        vt_action.triggered.connect(self.vt_plot)
 
         menu_bar.addMenu("Window")
         menu_bar.addMenu("Settings")
@@ -438,7 +568,7 @@ class MainWindow(QMainWindow):
         self.calibrate_action.setEnabled(False)
         self.calibrate_action.setStatusTip("Calibrate the sensor")
         self.calibrate_action.triggered.connect(lambda: self.calibration())
-        self.calibrate_action.triggered(self.calibrate_message)
+        # self.calibrate_action.triggered(self.calibrate_message)
         toolbar.addAction(self.calibrate_action)
 
         toolbar.addSeparator()
@@ -484,6 +614,11 @@ class MainWindow(QMainWindow):
         if isinstance(tab, TrailTab):
             return tab
         return None
+
+    def add_another_tab(self):
+        tab = TrailTab(self.num_trials, self.tab_widget)
+        self.tab_widget.addTab(tab, f"Trial {self.num_trials + 1}")
+        self.num_trials += 1
 
     def update_toolbar(self):
         tab = self.get_tab()
@@ -534,6 +669,7 @@ class MainWindow(QMainWindow):
             return
 
         self.status_widget.set_status("connecting")
+        self.repaint()
         file_directory = os.path.dirname(os.path.abspath(__file__))
         src_cfg_file = os.path.join(file_directory, "first_calibration.g4c")
 
@@ -552,7 +688,21 @@ class MainWindow(QMainWindow):
             self.status_widget.set_status("disconnected")
             return
 
-        self.hub_id, self.lindex, self.rindex = calibration_to_center(self.dongle_id)
+        try:
+            get_active_hubs(self.dongle_id, True)[0]
+        except:
+            QMessageBox.critical(self, "Error", "Failed to connect to hubs! Please check if they are online")
+            self.status_widget.set_status("disconnected")
+            connected = False
+            self.dongle_id = None
+            return
+
+        set_units(self.dongle_id)
+        self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
+
+        if not self.calibration_status:
+            QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
+
         self.is_connected = True
         self.connection_action.setEnabled(False)  # Disable connect button after successful connection
         self.calibrate_action.setEnabled(True)
@@ -562,16 +712,64 @@ class MainWindow(QMainWindow):
         self.update_toolbar()
 
     def calibration(self):
-        self.hub_id, self.lindex, self.rindex = calibration_to_center(self.dongle_id)
+        self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
+
+    def xt_plot(self):
+        self.xt = True
+        self.yt = False
+        self.zt = False
+        self.vt = False
+
+        self.get_tab().update_axis()
+
+    def yt_plot(self):
+        self.xt = False
+        self.yt = True
+        self.zt = False
+        self.vt = False
+
+        self.get_tab().update_axis()
+
+    def zt_plot(self):
+        self.xt = False
+        self.yt = False
+        self.zt = True
+        self.vt = False
+
+        self.get_tab().update_axis()
+
+    def vt_plot(self):
+        self.xt = False
+        self.yt = False
+        self.zt = False
+        self.vt = True
+
+        self.get_tab().update_axis()
 
     def download_excel(self):
-
         participant_code, ok = QInputDialog.getText(self, "Participant Code", "Enter the participant code:")
         if not ok or not participant_code.strip():
             QMessageBox.warning(self, "Warning", "Participant code is required!")
             return
 
-        participant_folder = os.path.join(os.getcwd(), participant_code)
+        folder = QFileDialog.getExistingDirectory(self, "Select Save Directory")
+        if not folder:
+            QMessageBox.question(self, "Warning", "No directory selected!")
+            return
+
+        # Create progress dialog with immediate visibility
+        progress_dialog = QProgressDialog("Exporting data...", "Cancel", 0, self.tab_widget.count(), self)
+        progress_dialog.setWindowModality(Qt.WindowModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.show()
+
+        # Force the dialog to update immediately
+        QApplication.processEvents()
+
+        # Disable main window during export
+        self.setEnabled(False)
+
+        participant_folder = os.path.join(folder, participant_code)
         os.makedirs(participant_folder, exist_ok=True)
 
         pdf = FPDF()
@@ -579,32 +777,74 @@ class MainWindow(QMainWindow):
         pdf.add_page()
         pdf.set_font("Arial", size=12)
 
-        for i in range(self.tab_widget.count()+1):
-            tab = self.tab_widget.widget(i)
+        def export_tab(index):
+            if progress_dialog.wasCanceled():
+                return False
 
-            # Generate Excel for each tab
-            data = {
-                "Time (s)": tab.xs,
-                "Left Sensor (cm)": tab.y1s,
-                "Right Sensor (cm)": tab.y2s,
-            }
-            df = pd.DataFrame(data)
-            trial_file = os.path.join(participant_folder, f"trial_{i + 1}.xlsx")
-            df.to_excel(trial_file, index=False)
+            # Explicitly update progress and process events
+            progress_dialog.setValue(index)
+            QApplication.processEvents()
 
-            # Add notes to the PDF
-            pdf.set_font("Arial", style="B", size=14)
-            pdf.cell(0, 10, f"Trial {i + 1}", ln=True)
-            pdf.set_font("Arial", size=12)
-            notes = tab.notes_input.toPlainText().strip()
-            pdf.multi_cell(0, 10, notes if notes else "No Notes")
-            pdf.ln(5)  # Add spacing
+            tab = self.tab_widget.widget(index)
 
-        # Save the PDF
-        pdf_file = os.path.join(participant_folder, f"{participant_code}.pdf")
-        pdf.output(pdf_file)
+            if isinstance(tab, TrailTab):
+                data = {
+                    "Time (s)": tab.xs if tab.xs else [],
+                    "Left Sensor x (cm)": [pos[0] for pos in tab.log_left_plot] if tab.xs else [],
+                    "Left Sensor y (cm)": [pos[1] for pos in tab.log_left_plot] if tab.xs else [],
+                    "Left Sensor z (cm)": [pos[2] for pos in tab.log_left_plot] if tab.xs else [],
+                    "Left Sensor v (m/s)": [pos[3] for pos in tab.log_left_plot] if tab.xs else [],
+                    "Right Sensor x (cm)": [pos[0] for pos in tab.log_right_plot] if tab.xs else [],
+                    "Right Sensor y (cm)": [pos[1] for pos in tab.log_right_plot] if tab.xs else [],
+                    "Right Sensor z (cm)": [pos[2] for pos in tab.log_right_plot] if tab.xs else [],
+                    "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right_plot] if tab.xs else [],
+                }
+                max_length = max(len(v) for v in data.values())
+                for key in data:
+                    data[key].extend([None] * (max_length - len(data[key])))
 
-        QMessageBox.information(self, "Success", f"Data saved in folder: {participant_folder}")
+                df = pd.DataFrame(data)
+                trial_file = os.path.join(participant_folder, f"trial_{index + 1}.xlsx")
+                df.to_excel(trial_file, index=False)
+
+                # Add notes to the PDF
+                pdf.set_font("Arial", style="B", size=14)
+                pdf.cell(0, 10, f"Trial {index + 1}", ln=True)
+                pdf.set_font("Arial", size=12)
+                notes = tab.notes_input.toPlainText().strip()
+                pdf.multi_cell(0, 10, notes if notes else "No Notes")
+                pdf.ln(5)  # Add spacing
+
+                if tab.xs:
+                    # Save the plot to a temporary file
+                    plot_filename = os.path.join(participant_folder, f"trial_{index + 1}_plot.png")
+                    tab.canvas.figure.savefig(plot_filename, dpi=300, bbox_inches='tight')
+
+                    # Add the plot to the PDF
+                    pdf.image(plot_filename, x=None, y=None, w=100)
+                pdf.ln(5)
+
+        def process_tabs():
+            try:
+                for i in range(self.tab_widget.count()):
+                    export_tab(i)
+
+                # Finalize export
+                pdf_file = os.path.join(participant_folder, f"{participant_code}.pdf")
+                pdf.output(pdf_file)
+
+                self.setEnabled(True)
+                progress_dialog.close()
+
+                QMessageBox.information(self, "Success", f"Data saved in folder: {participant_folder}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
+                self.setEnabled(True)
+                progress_dialog.close()
+
+        # Process tabs immediately
+        process_tabs()
+
 
 app = QApplication(sys.argv)
 startup = StartUp()
