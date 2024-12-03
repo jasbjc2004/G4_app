@@ -11,15 +11,16 @@ from enum import Enum
 from PySide6.QtWidgets import (
     QApplication, QVBoxLayout, QMainWindow, QWidget, QPushButton,
     QLineEdit, QLabel, QHBoxLayout, QDateEdit, QTextEdit, QMessageBox,
-    QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy, QInputDialog, QFileDialog
+    QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy, QInputDialog,
+    QFileDialog, QDialog
 )
 from PySide6.QtGui import QAction, QPainter, QColor
-from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property
+from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property, QSettings
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
-from data_processing import calibration_to_center
+#from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
+#from data_processing import calibration_to_center
 
 MAX_TRAILS = 21
 READ_SAMPLE = True
@@ -52,10 +53,15 @@ class StartUp(QWidget):
 
 
 # SetUp window
-class SetUp(QWidget):
+class SetUp(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Project Setup")
+        self.setWindowTitle("Project Settings")
+
+        self.settings = QSettings("PNO", "GUIsensor")
+
+        self.settings.value("additional notes", "")
+
 
         main_layout = QVBoxLayout()
 
@@ -96,8 +102,16 @@ class SetUp(QWidget):
         notes_layout.addWidget(notes_label)
         notes_layout.addWidget(self.notes_input)
 
+        #assessor
+        assessor_layout = QHBoxLayout()
+        assessor_label = QLabel("Assessor:            ")
+        self.assessor_input = QLineEdit()
+        assessor_layout.addWidget(assessor_label)
+        assessor_layout.addWidget(self.assessor_input)
+
         # Add widgets to the form layout
         form_layout.addLayout(name_layout)
+        form_layout.addLayout(assessor_layout)
         form_layout.addLayout(date_layout)
         form_layout.addLayout(trial_layout)
         form_layout.addLayout(notes_layout)
@@ -389,8 +403,8 @@ class TrailTab(QWidget):
                 self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
                 self.ax.set_ylabel('Velocity (cm/s)')
 
-                self.plot_left_data = [pos[4] for pos in self.log_left_plot]
-                self.plot_right_data = [pos[4] for pos in self.log_right_plot]
+                self.plot_left_data = [pos[3] for pos in self.log_left_plot]
+                self.plot_right_data = [pos[3] for pos in self.log_right_plot]
 
         self.line1.set_xdata(self.xs)
         self.line1.set_ydata(self.plot_left_data)
@@ -751,18 +765,29 @@ class MainWindow(QMainWindow):
         for i in range(self.tab_widget.count()):
             tab = self.tab_widget.widget(i)
 
-            # Generate Excel for each tab
             if isinstance(tab, TrailTab):
+
+                def get_safe_data(log_data, index):
+                    if log_data and len(log_data) > index:
+                        return log_data[index]
+                    return []
+
                 data = {
-                    "Time (s)": tab.xs,
-                    "Left Sensor x (cm)": tab.log_left_plot[0],
-                    "Left Sensor y (cm)": tab.log_left_plot[1],
-                    "Left Sensor z (cm)": tab.log_left_plot[2],
-                    "Right Sensor x (cm)": tab.log_right_plot[0],
-                    "Right Sensor y (cm)": tab.log_right_plot[1],
-                    "Right Sensor z (cm)": tab.log_right_plot[2]
+                    "Time (s)": tab.xs if tab.xs else [],
+                    "Left Sensor x (cm)": get_safe_data(tab.log_left_plot, 0),
+                    "Left Sensor y (cm)": get_safe_data(tab.log_left_plot, 1),
+                    "Left Sensor z (cm)": get_safe_data(tab.log_left_plot, 2),
+                    "Left Sensor v (m/s)": get_safe_data(tab.log_left_plot, 3),
+                    "Right Sensor x (cm)": get_safe_data(tab.log_right_plot, 0),
+                    "Right Sensor y (cm)": get_safe_data(tab.log_right_plot, 1),
+                    "Right Sensor z (cm)": get_safe_data(tab.log_right_plot, 2),
+                    "Right Sensor v (m/s)": get_safe_data(tab.log_right_plot, 3),
                 }
-                df = pd.DataFrame(data)
+            max_length = max(len(v) for v in data.values())
+            for key in data:
+                data[key].extend([None] * (max_length - len(data[key])))
+
+            df = pd.DataFrame(data)
             trial_file = os.path.join(participant_folder, f"trial_{i + 1}.xlsx")
             df.to_excel(trial_file, index=False)
 
