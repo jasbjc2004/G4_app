@@ -12,21 +12,34 @@ from PySide6.QtWidgets import (
     QApplication, QVBoxLayout, QMainWindow, QWidget, QPushButton,
     QLineEdit, QLabel, QHBoxLayout, QDateEdit, QTextEdit, QMessageBox,
     QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy, QInputDialog,
-    QFileDialog, QDialog
+    QFileDialog, QDialog, QProgressDialog, QCheckBox, QDialogButtonBox
 )
 from PySide6.QtGui import QAction, QPainter, QColor
 from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property, QSettings
+from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-#from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
-#from data_processing import calibration_to_center
+from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
+from data_processing import calibration_to_center
 
 MAX_TRAILS = 21
-READ_SAMPLE = True
-BEAUTY_SPEED = True
+READ_SAMPLE = False
+BEAUTY_SPEED = False
 MAX_ATTEMPTS = 10
 
+"""
+# https://stackoverflow.com/questions/31836104/pyinstaller-and-onefile-how-to-include-an-image-in-the-exe-file
+def resource_path(relative_path):
+    # Get absolute path to resource, works for dev and for PyInstaller
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+"""
 
 # StartUp window
 class StartUp(QWidget):
@@ -342,6 +355,8 @@ class TrailTab(QWidget):
             if isinstance(main_window, MainWindow):
                 main_window.update_toolbar()
 
+            self.start_time = None
+
     def read_sensor_data(self):
         elapsed_time = time.time() - self.start_time
 
@@ -375,7 +390,8 @@ class TrailTab(QWidget):
                 return elapsed_time, [0, 0, -25+5 * (elapsed_time - 15)], [0, 25-5 * (elapsed_time - 15), 0]
             return elapsed_time, [0] * 3, [0] * 3
         else:
-            return elapsed_time, [random.randint(0, 20)] * 3, [random.randint(0, 20)] * 3
+            return elapsed_time, [random.randint(-20, 20), random.randint(0, 20), random.randint(-20, 0)], \
+                                 [random.randint(0, 20), random.randint(0, 20), random.randint(-20, 0)]
 
     def update_axis(self):
         main_window = self.window()
@@ -385,7 +401,7 @@ class TrailTab(QWidget):
                 self.ax.set_title(f'Trial {self.trial_number + 1} - x-coordinates')
                 self.ax.set_ylabel('X-coordinates (cm)')
 
-                self.plot_left_data = [abs(pos[0]) for pos in self.log_left_plot]
+                self.plot_left_data = [abs(pos[0]) if main_window.set_abs_value else pos[0] for pos in self.log_left_plot]
                 self.plot_right_data = [pos[0] for pos in self.log_right_plot]
             elif main_window.yt:
                 self.ax.set_title(f'Trial {self.trial_number + 1} - y-coordinates')
@@ -411,12 +427,21 @@ class TrailTab(QWidget):
         self.line2.set_xdata(self.xs)
         self.line2.set_ydata(self.plot_right_data)
 
-        self.ax.set_xlim(0, self.xs[-1] + 1)
+        self.ax.set_xlim(0, 10)
         self.ax.set_ylim(0, 10)
-        if (max(max(self.plot_left_data[-200:], default=1),
-                max(self.plot_right_data[-200:], default=1)) * 1.1) > 10:
-            self.ax.set_ylim(0, max(max(self.plot_left_data[-200:], default=1),
-                                    max(self.plot_right_data[-200:], default=1)) * 1.1)
+        if self.xs:  # Only adjust if there's data
+            self.ax.set_xlim(0, self.xs[-1] + 1)
+
+            max_y = max(max(self.plot_left_data[-200:], default=1),
+                        max(self.plot_right_data[-200:], default=1)) * 1.1
+            min_y = min(min(self.plot_left_data[-200:], default=1),
+                        min(self.plot_right_data[-200:], default=1)) * 1.1
+            if max_y < 10:
+                max_y = 10
+            if min_y > 0 or main_window.set_abs_value:
+                min_y = 0
+
+            self.ax.set_ylim(min_y, max_y)
 
         # Redraw canvas
         self.canvas.draw()
@@ -425,6 +450,7 @@ class TrailTab(QWidget):
         if self.reading_active and self.trial_state == TrialState.running:
             # Read simulated data
             time_val, lpos, rpos = self.read_sensor_data()
+            lpos, rpos = list(lpos), list(rpos)
 
             if len(self.log_left_plot) > 0:
                 vl, vr = sqrt(((lpos[0] - self.log_left_plot[-1][0]) / (time_val - self.xs[- 1])) ** 2 +
@@ -440,7 +466,10 @@ class TrailTab(QWidget):
             main_window = self.window()
             if isinstance(main_window, MainWindow):
                 if main_window.xt:
-                    y1, y2 = -lpos[0], rpos[0]
+                    if main_window.set_abs_value:
+                        y1, y2 = -lpos[0], rpos[0]
+                    else:
+                        y1, y2 = lpos[0], rpos[0]
                 elif main_window.yt:
                     y1, y2 = lpos[1], rpos[1]
                 elif main_window.zt:
@@ -467,10 +496,17 @@ class TrailTab(QWidget):
             # Adjust axes
             if self.xs:  # Only adjust if there's data
                 self.ax.set_xlim(0, self.xs[-1] + 1)
-                if (max(max(self.plot_left_data[-200:], default=1),
-                        max(self.plot_right_data[-200:], default=1)) * 1.1) > 10:
-                    self.ax.set_ylim(0, max(max(self.plot_left_data[-200:], default=1),
-                                            max(self.plot_right_data[-200:], default=1)) * 1.1)
+
+                max_y = max(max(self.plot_left_data[-200:], default=1),
+                            max(self.plot_right_data[-200:], default=1)) * 1.1
+                min_y = min(min(self.plot_left_data[-200:], default=1),
+                            min(self.plot_right_data[-200:], default=1)) * 1.1
+                if max_y < 10:
+                    max_y = 10
+                if min_y > 0 or main_window.set_abs_value:
+                    min_y = 0
+
+                self.ax.set_ylim(min_y, max_y)
 
             # Redraw canvas
             self.canvas.draw()
@@ -489,6 +525,7 @@ class MainWindow(QMainWindow):
         self.lindex = None
         self.rindex = None
         self.reading_active = False
+        self.set_abs_value = False
 
         self.xt = False
         self.yt = False
@@ -524,7 +561,7 @@ class MainWindow(QMainWindow):
     def setup_menubar(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
-        excel_action = file_menu.addAction("Export to Excel")
+        excel_action = file_menu.addAction("Export to Excel and PDF")
         excel_action.triggered.connect(self.download_excel)
         tab_extra = file_menu.addAction("Add extra tab")
         tab_extra.triggered.connect(self.add_another_tab)
@@ -543,7 +580,10 @@ class MainWindow(QMainWindow):
         vt_action.triggered.connect(self.vt_plot)
 
         menu_bar.addMenu("Window")
-        menu_bar.addMenu("Settings")
+        settings_menu = menu_bar.addMenu("Settings")
+        absx_action = settings_menu.addAction("Set absolute values to x-axis")
+        absx_action.setCheckable(True)
+        absx_action.triggered.connect(lambda: self.plot_absolute_x(absx_action))
         menu_bar.addMenu("&Help")
 
         menu_bar.setNativeMenuBar(False)
@@ -565,7 +605,6 @@ class MainWindow(QMainWindow):
         self.calibrate_action.setEnabled(False)
         self.calibrate_action.setStatusTip("Calibrate the sensor")
         self.calibrate_action.triggered.connect(lambda: self.calibration())
-        # self.calibrate_action.triggered(self.calibrate_message)
         toolbar.addAction(self.calibrate_action)
 
         toolbar.addSeparator()
@@ -667,8 +706,8 @@ class MainWindow(QMainWindow):
 
         self.status_widget.set_status("connecting")
         self.repaint()
-        file_directory = os.path.dirname(os.path.abspath(__file__))
-        src_cfg_file = os.path.join(file_directory, "first_calibration.g4c")
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        src_cfg_file = (os.path.join(file_directory, "first_calibration.g4c"))
 
         connected = False
         self.dongle_id = None
@@ -690,7 +729,6 @@ class MainWindow(QMainWindow):
         except:
             QMessageBox.critical(self, "Error", "Failed to connect to hubs! Please check if they are online")
             self.status_widget.set_status("disconnected")
-            connected = False
             self.dongle_id = None
             return
 
@@ -743,67 +781,161 @@ class MainWindow(QMainWindow):
 
         self.get_tab().update_axis()
 
+    def plot_absolute_x(self, button):
+        if button.isChecked():
+            self.set_abs_value = True
+        else:
+            self.set_abs_value = False
+        self.get_tab().update_axis()
+
     def download_excel(self):
-        participant_code, ok = QInputDialog.getText(self, "Participant Code", "Enter the participant code:")
-        if not ok or not participant_code.strip():
-            QMessageBox.warning(self, "Warning", "Participant code is required!")
-            return
+        while True:
+            selection_plot = QDialog(self)
+            selection_plot.setWindowTitle("Select graph to save")
+            layout = QVBoxLayout()
 
-        folder = QFileDialog.getExistingDirectory(self, "Select Save Directory")
-        if not folder:
-            QMessageBox.question(self, "Warning", "No directory selected!")
-            return
+            # Participant code input
+            name_layout = QHBoxLayout()
+            name_label = QLabel("Participant code:")
+            participant_code = QLineEdit()
+            name_layout.addWidget(name_label)
+            name_layout.addWidget(participant_code)
+            layout.addLayout(name_layout)
 
-        participant_folder = os.path.join(folder, participant_code)
-        os.makedirs(participant_folder, exist_ok=True)
+            # Plot selection checkboxes
+            checkboxes = [
+                QCheckBox("The x-position"),
+                QCheckBox("The y-position"),
+                QCheckBox("The z-position"),
+                QCheckBox("The speed")
+            ]
+            for checkbox in checkboxes:
+                checkbox.setChecked(True)
+                layout.addWidget(checkbox)
 
-        pdf = FPDF()
-        pdf.set_auto_page_break(auto=True, margin=15)
-        pdf.add_page()
-        pdf.set_font("Arial", size=12)
+            # Dialog buttons
+            button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            button_box.accepted.connect(selection_plot.accept)
+            button_box.rejected.connect(selection_plot.reject)
+            layout.addWidget(button_box)
 
-        for i in range(self.tab_widget.count()):
-            tab = self.tab_widget.widget(i)
+            selection_plot.setLayout(layout)
+            result = selection_plot.exec()
 
-            if isinstance(tab, TrailTab):
+            # Handle user input
+            if result == QDialog.Rejected:
+                return
 
-                def get_safe_data(log_data, index):
-                    if log_data and len(log_data) > index:
-                        return log_data[index]
-                    return []
+            if not participant_code.text().strip():
+                QMessageBox.warning(self, "Warning", "Participant code is required!")
+                continue
 
-                data = {
-                    "Time (s)": tab.xs if tab.xs else [],
-                    "Left Sensor x (cm)": get_safe_data(tab.log_left_plot, 0),
-                    "Left Sensor y (cm)": get_safe_data(tab.log_left_plot, 1),
-                    "Left Sensor z (cm)": get_safe_data(tab.log_left_plot, 2),
-                    "Left Sensor v (m/s)": get_safe_data(tab.log_left_plot, 3),
-                    "Right Sensor x (cm)": get_safe_data(tab.log_right_plot, 0),
-                    "Right Sensor y (cm)": get_safe_data(tab.log_right_plot, 1),
-                    "Right Sensor z (cm)": get_safe_data(tab.log_right_plot, 2),
-                    "Right Sensor v (m/s)": get_safe_data(tab.log_right_plot, 3),
-                }
-            max_length = max(len(v) for v in data.values())
-            for key in data:
-                data[key].extend([None] * (max_length - len(data[key])))
+            # File and folder selection
+            folder = QFileDialog.getExistingDirectory(self, "Select Save Directory", os.path.expanduser("~/Documents"))
+            if not folder:
+                QMessageBox.warning(self, "Warning", "No directory selected! Please try again.")
+                return
 
-            df = pd.DataFrame(data)
-            trial_file = os.path.join(participant_folder, f"trial_{i + 1}.xlsx")
-            df.to_excel(trial_file, index=False)
+            # Disable main window during export
+            self.setEnabled(False)
 
-            # Add notes to the PDF
-            pdf.set_font("Arial", style="B", size=14)
-            pdf.cell(0, 10, f"Trial {i + 1}", ln=True)
+            # Create participant folder
+            participant_folder = os.path.join(folder, participant_code.text())
+            os.makedirs(participant_folder, exist_ok=True)
+
+            # PDF and export setup
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.add_page()
             pdf.set_font("Arial", size=12)
-            notes = tab.notes_input.toPlainText().strip()
-            pdf.multi_cell(0, 10, notes if notes else "No Notes")
-            pdf.ln(5)  # Add spacing
 
-        # Save the PDF
-        pdf_file = os.path.join(participant_folder, f"{participant_code}.pdf")
-        pdf.output(pdf_file)
+            def export_tab(index):
+                QApplication.processEvents()
+                tab = self.tab_widget.widget(index)
 
-        QMessageBox.information(self, "Success", f"Data saved in folder: {participant_folder}")
+                if isinstance(tab, TrailTab):
+                    # Data export logic (same as your original code)
+                    data = {
+                        "Time (s)": tab.xs if tab.xs else [],
+                        "Left Sensor x (cm)": [pos[0] for pos in tab.log_left_plot] if tab.xs else [],
+                        "Left Sensor y (cm)": [pos[1] for pos in tab.log_left_plot] if tab.xs else [],
+                        "Left Sensor z (cm)": [-pos[2] for pos in tab.log_left_plot] if tab.xs else [],
+                        "Left Sensor v (m/s)": [pos[3] for pos in tab.log_left_plot] if tab.xs else [],
+                        "Right Sensor x (cm)": [pos[0] for pos in tab.log_right_plot] if tab.xs else [],
+                        "Right Sensor y (cm)": [pos[1] for pos in tab.log_right_plot] if tab.xs else [],
+                        "Right Sensor z (cm)": [-pos[2] for pos in tab.log_right_plot] if tab.xs else [],
+                        "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right_plot] if tab.xs else [],
+                    }
+                    max_length = max(len(v) for v in data.values())
+                    for key in data:
+                        data[key].extend([None] * (max_length - len(data[key])))
+
+                    df = pd.DataFrame(data)
+                    trial_file = os.path.join(participant_folder, f"trial_{index + 1}.xlsx")
+                    df.to_excel(trial_file, index=False)
+
+                    # PDF generation logic (same as your original code)
+                    pdf.set_font("Arial", style="B", size=14)
+                    pdf.cell(0, 10, f"Trial {index + 1}", ln=True)
+                    pdf.set_font("Arial", size=12)
+                    notes = tab.notes_input.toPlainText().strip()
+                    pdf.multi_cell(0, 10, notes if notes else "No Notes")
+                    pdf.ln(5)
+
+                    # Plot export logic (same as your original code)
+                    if tab.xs:
+                        if True in [checker.isChecked() for checker in checkboxes]:
+                            for pos_index in range(4):
+                                if checkboxes[pos_index].isChecked():
+                                    plt.figure(figsize=(10, 6))
+                                    left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
+                                                 data["Left Sensor y (cm)"] if pos_index == 1 else
+                                                 data["Left Sensor z (cm)"] if pos_index == 2 else
+                                                 data["Left Sensor v (m/s)"]][0]
+                                    right_data = [data["Right Sensor x (cm)"] if pos_index == 0 else
+                                                 data["Right Sensor y (cm)"] if pos_index == 1 else
+                                                 data["Right Sensor z (cm)"] if pos_index == 2 else
+                                                 data["Right Sensor v (m/s)"]][0]
+
+                                    plt.plot(tab.xs, left_data, label='Left Sensor')
+                                    plt.plot(tab.xs, right_data, label='Right Sensor')
+
+                                    plt.title(
+                                        f"{'X' if pos_index == 0 else 'Y' if pos_index == 1 else 'Z' if pos_index == 2 else 'Velocity'} Plot")
+                                    plt.xlabel("Time (s)")
+                                    ylabel = ["X Position (cm)" if pos_index == 0 else
+                                              "Y Position (cm)" if pos_index == 0 else
+                                              "Z Position (cm)" if pos_index == 0 else
+                                              "Speed (cm)"][0]
+                                    plt.ylabel(ylabel)
+                                    plt.legend()
+                                    plt.grid(True)
+
+                                    plot_filename = os.path.join(participant_folder,
+                                                    f"trial_{index + 1}_plot_{['x', 'y', 'z', 'v'][pos_index]}.png")
+                                    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+                                    plt.close()
+                                    pdf.image(plot_filename, x=None, y=None, w=100)
+                                    pdf.ln(5)
+
+            def process_tabs():
+                try:
+                    for i in range(self.tab_widget.count()):
+                        export_tab(i)
+
+                    # Finalize export
+                    pdf_file = os.path.join(participant_folder, f"{participant_code.text()}.pdf")
+                    pdf.output(pdf_file)
+
+                    self.setEnabled(True)
+                    QMessageBox.information(self, "Success", f"Data saved in folder: {participant_folder}")
+                except Exception as e:
+                    QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
+                    self.setEnabled(True)
+
+            # Process tabs and complete export
+            process_tabs()
+            break
 
 
 app = QApplication(sys.argv)
