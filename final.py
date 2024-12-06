@@ -12,23 +12,34 @@ from PySide6.QtWidgets import (
     QApplication, QVBoxLayout, QMainWindow, QWidget, QPushButton,
     QLineEdit, QLabel, QHBoxLayout, QDateEdit, QTextEdit, QMessageBox,
     QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy, QInputDialog,
-    QFileDialog, QDialog, QProgressDialog, QCheckBox, QDialogButtonBox
+    QFileDialog, QDialog, QProgressDialog, QCheckBox, QDialogButtonBox,
+
 )
 from PySide6.QtGui import QAction, QPainter, QColor
-from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property, QSettings
+from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property, QObject, QThread, Signal
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
-from data_processing import calibration_to_center
+#from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
+#from data_processing import calibration_to_center
 
 MAX_TRAILS = 21
-READ_SAMPLE = False
+READ_SAMPLE = True
 BEAUTY_SPEED = False
 MAX_ATTEMPTS = 10
 
 
+# thread setup
+class Worker(QObject):
+    progress = Signal(int)
+    finished = Signal()
+
+    def run(self):
+        for i in range(101):
+            time.sleep(0.05)
+            self.progress.emit(i)
+        self.finished.emit()
 # StartUp window
 class StartUp(QWidget):
     def __init__(self):
@@ -57,12 +68,6 @@ class StartUp(QWidget):
 class SetUp(QDialog):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Project Settings")
-
-        self.settings = QSettings("PNO", "GUIsensor")
-
-        self.settings.value("additional notes", "")
-
 
         main_layout = QVBoxLayout()
 
@@ -514,6 +519,8 @@ class MainWindow(QMainWindow):
         self.rindex = None
         self.reading_active = False
         self.set_abs_value = False
+        self.set_automatic = False
+        self.progress_dialog = None
 
         self.xt = False
         self.yt = False
@@ -572,11 +579,18 @@ class MainWindow(QMainWindow):
         absx_action = settings_menu.addAction("Set absolute values to x-axis")
         absx_action.setCheckable(True)
         absx_action.triggered.connect(lambda: self.plot_absolute_x(absx_action))
+
+        switch_action = settings_menu.addAction("Switch tab automatically")
+        switch_action.setCheckable(True)
+        switch_action.triggered.connect(lambda: self.set_automatic_tab(switch_action))
+
         menu_bar.addMenu("&Help")
 
         menu_bar.setNativeMenuBar(False)
 
+
     def setup_toolbar(self):
+
         toolbar = QToolBar("My main toolbar")
         toolbar.setIconSize(QSize(16, 16))
         self.addToolBar(toolbar)
@@ -586,6 +600,7 @@ class MainWindow(QMainWindow):
         if READ_SAMPLE:
             self.connection_action.setEnabled(False)
         self.connection_action.setStatusTip("Connect and calibrate the sensor")
+        self.connection_action.triggered.connect(lambda: self.show_progress_dialog("Connecting...", 100))
         self.connection_action.triggered.connect(lambda: self.connecting())
         toolbar.addAction(self.connection_action)
 
@@ -593,6 +608,7 @@ class MainWindow(QMainWindow):
         self.calibrate_action.setEnabled(False)
         self.calibrate_action.setStatusTip("Calibrate the sensor")
         self.calibrate_action.triggered.connect(lambda: self.calibration())
+        self.calibrate_action.triggered.connect(lambda: self.show_progress_dialog("Calibrating...", 100))
         toolbar.addAction(self.calibrate_action)
 
         toolbar.addSeparator()
@@ -605,6 +621,7 @@ class MainWindow(QMainWindow):
         self.stop_action.setStatusTip("Stop the current trial")
         self.stop_action.setEnabled(False)
         self.stop_action.triggered.connect(lambda: self.stop_current_reading())
+        self.stop_action.triggered.connect(lambda: self.switch_to_next_tab())
 
         self.reset_action = QAction("Overwrite trial", self)
         self.reset_action.setStatusTip("Overwrite the current trial")
@@ -687,6 +704,17 @@ class MainWindow(QMainWindow):
             tab.reset_reading()
             self.update_toolbar()
 
+    def switch_to_next_tab(self,):
+        if self.set_automatic == True:
+            current_index = self.tab_widget.currentIndex()
+            total_tabs = self.tab_widget.count()
+
+            if current_index < total_tabs:
+                next_index = (current_index + 1)
+                self.tab_widget.setCurrentIndex(next_index)
+        else:
+            pass
+
     def connecting(self):
         QMessageBox.information(self, "Info", "Started to connect. Please wait a bit.")
 
@@ -737,9 +765,33 @@ class MainWindow(QMainWindow):
         self.update_toolbar()
 
     def calibration(self):
+
         QMessageBox.information(self, "Info", "Started to calibrate. "
                                               "Please wait a bit and keep the sensors at a fixed position.")
         self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
+
+        self.start_button.setEnabled(False)
+
+    def show_progress_dialog(self, task_name, duration=100):
+
+        progress_dialog = QProgressDialog(task_name, "Cancel", 0, duration, self)
+        progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setValue(0)
+
+        worker = Worker()
+        worker.progress.connect(progress_dialog.setValue)
+        worker.finished.connect(progress_dialog.accept)
+
+        worker_thread = QThread()
+        worker.moveToThread(worker_thread)
+        worker_thread.started.connect(worker.run)
+        worker_thread.start()
+
+        progress_dialog.exec()
+
+        worker_thread.quit()
+        worker_thread.wait()
 
     def xt_plot(self):
         self.xt = True
@@ -780,6 +832,13 @@ class MainWindow(QMainWindow):
             self.set_abs_value = False
         self.get_tab().update_axis()
 
+    def set_automatic_tab(self,button):
+        if button.isChecked():
+            self.set_automatic = True
+        else:
+            self.set_automatic = False
+
+
     def download_excel(self):
         while True:
             selection_plot = QDialog(self)
@@ -796,10 +855,10 @@ class MainWindow(QMainWindow):
 
             # Plot selection checkboxes
             checkboxes = [
-                QCheckBox("The x-position"),
-                QCheckBox("The y-position"),
-                QCheckBox("The z-position"),
-                QCheckBox("The speed")
+                QCheckBox("The x-plot"),
+                QCheckBox("The y-plot"),
+                QCheckBox("The z-plot"),
+                QCheckBox("The v-plot")
             ]
             for checkbox in checkboxes:
                 checkbox.setChecked(True)
@@ -909,6 +968,8 @@ class MainWindow(QMainWindow):
                                     plt.close()
                                     pdf.image(plot_filename, x=None, y=None, w=100)
                                     pdf.ln(5)
+
+            self.show_progress_dialog("Exporting to Excel...", 300)
 
             def process_tabs():
                 try:
