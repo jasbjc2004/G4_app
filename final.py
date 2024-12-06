@@ -28,18 +28,6 @@ READ_SAMPLE = False
 BEAUTY_SPEED = False
 MAX_ATTEMPTS = 10
 
-"""
-# https://stackoverflow.com/questions/31836104/pyinstaller-and-onefile-how-to-include-an-image-in-the-exe-file
-def resource_path(relative_path):
-    # Get absolute path to resource, works for dev and for PyInstaller
-    try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)
-"""
 
 # StartUp window
 class StartUp(QWidget):
@@ -700,6 +688,8 @@ class MainWindow(QMainWindow):
             self.update_toolbar()
 
     def connecting(self):
+        QMessageBox.information(self, "Info", "Started to connect. Please wait a bit.")
+
         if self.is_connected:
             QMessageBox.information(self, "Info", "Already connected to sensors!")
             return
@@ -747,6 +737,8 @@ class MainWindow(QMainWindow):
         self.update_toolbar()
 
     def calibration(self):
+        QMessageBox.information(self, "Info", "Started to calibrate. "
+                                              "Please wait a bit and keep the sensors at a fixed position.")
         self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
 
     def xt_plot(self):
