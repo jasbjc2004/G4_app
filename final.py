@@ -3,7 +3,7 @@ import random
 import sys
 import time
 from math import sqrt
-
+import concurrent.futures
 import pandas as pd
 from fpdf import FPDF
 from enum import Enum
@@ -11,9 +11,8 @@ from enum import Enum
 from PySide6.QtWidgets import (
     QApplication, QVBoxLayout, QMainWindow, QWidget, QPushButton,
     QLineEdit, QLabel, QHBoxLayout, QDateEdit, QTextEdit, QMessageBox,
-    QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy, QInputDialog,
+    QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy,
     QFileDialog, QDialog, QProgressDialog, QCheckBox, QDialogButtonBox,
-
 )
 from PySide6.QtGui import QAction, QPainter, QColor
 from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property, QObject, QThread, Signal
@@ -21,12 +20,12 @@ from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-#from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs
-#from data_processing import calibration_to_center
+from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs, increment, close_sensor
+from data_processing import calibration_to_center
 
 MAX_TRAILS = 21
 READ_SAMPLE = True
-BEAUTY_SPEED = False
+BEAUTY_SPEED = True
 MAX_ATTEMPTS = 10
 
 
@@ -40,6 +39,8 @@ class Worker(QObject):
             time.sleep(0.05)
             self.progress.emit(i)
         self.finished.emit()
+
+
 # StartUp window
 class StartUp(QWidget):
     def __init__(self):
@@ -296,8 +297,8 @@ class TrailTab(QWidget):
         self.ax.set_ylim(0, 10)
         self.ax.set_xlim(0, 10)
 
-        self.line1, = self.ax.plot([], [], lw=2, label='Left', color='blue')
-        self.line2, = self.ax.plot([], [], lw=2, label='Right', color='orange')
+        self.line1, = self.ax.plot([], [], lw=2, label='Left', color='green')
+        self.line2, = self.ax.plot([], [], lw=2, label='Right', color='red')
         self.ax.legend()
 
         self.layout_tab.addWidget(self.canvas)
@@ -588,7 +589,6 @@ class MainWindow(QMainWindow):
 
         menu_bar.setNativeMenuBar(False)
 
-
     def setup_toolbar(self):
 
         toolbar = QToolBar("My main toolbar")
@@ -600,7 +600,7 @@ class MainWindow(QMainWindow):
         if READ_SAMPLE:
             self.connection_action.setEnabled(False)
         self.connection_action.setStatusTip("Connect and calibrate the sensor")
-        self.connection_action.triggered.connect(lambda: self.show_progress_dialog("Connecting...", 100))
+        #self.connection_action.triggered.connect(lambda: self.show_progress_dialog("Connecting...", 100))
         self.connection_action.triggered.connect(lambda: self.connecting())
         toolbar.addAction(self.connection_action)
 
@@ -608,7 +608,7 @@ class MainWindow(QMainWindow):
         self.calibrate_action.setEnabled(False)
         self.calibrate_action.setStatusTip("Calibrate the sensor")
         self.calibrate_action.triggered.connect(lambda: self.calibration())
-        self.calibrate_action.triggered.connect(lambda: self.show_progress_dialog("Calibrating...", 100))
+        #self.calibrate_action.triggered.connect(lambda: self.show_progress_dialog("Calibrating...", 100))
         toolbar.addAction(self.calibrate_action)
 
         toolbar.addSeparator()
@@ -701,19 +701,21 @@ class MainWindow(QMainWindow):
         tab = self.get_tab()
 
         if tab is not None:
-            tab.reset_reading()
-            self.update_toolbar()
+            ret = QMessageBox.warning(self, "Warning",
+                                      f"Do you really want to reset the data for trial {self.tab_widget.currentIndex()+1}?",
+                                      QMessageBox.Yes | QMessageBox.Cancel)
+            if ret == QMessageBox.Yes:
+                tab.reset_reading()
+                self.update_toolbar()
 
     def switch_to_next_tab(self,):
-        if self.set_automatic == True:
+        if self.set_automatic:
             current_index = self.tab_widget.currentIndex()
             total_tabs = self.tab_widget.count()
 
             if current_index < total_tabs:
                 next_index = (current_index + 1)
                 self.tab_widget.setCurrentIndex(next_index)
-        else:
-            pass
 
     def connecting(self):
         QMessageBox.information(self, "Info", "Started to connect. Please wait a bit.")
@@ -752,6 +754,7 @@ class MainWindow(QMainWindow):
 
         set_units(self.dongle_id)
         self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
+        #increment(self.dongle_id, self.hub_id, (self.lindex, self.rindex), (0.1, 0.1))
 
         if not self.calibration_status:
             QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
@@ -765,12 +768,13 @@ class MainWindow(QMainWindow):
         self.update_toolbar()
 
     def calibration(self):
-
-        QMessageBox.information(self, "Info", "Started to calibrate. "
-                                              "Please wait a bit and keep the sensors at a fixed position.")
-        self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
-
-        self.start_button.setEnabled(False)
+        ret = QMessageBox.warning(self, "Warning",
+                                  "Do you really want to calibrate again?",
+                                  QMessageBox.Yes | QMessageBox.Cancel)
+        if ret == QMessageBox.Yes:
+            QMessageBox.information(self, "Info", "Started to calibrate. "
+                                                  "Please wait a bit and keep the sensors at a fixed position.")
+            self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
 
     def show_progress_dialog(self, task_name, duration=100):
 
@@ -838,6 +842,13 @@ class MainWindow(QMainWindow):
         else:
             self.set_automatic = False
 
+    def closeEvent(self, event):
+        ret = QMessageBox.warning(self, "Warning",
+                                  "Are you sure you want to quit the application?",
+                                  QMessageBox.Yes | QMessageBox.Cancel)
+        if ret == QMessageBox.Yes:
+            close_sensor()
+            event.accept()
 
     def download_excel(self):
         while True:
@@ -935,41 +946,36 @@ class MainWindow(QMainWindow):
 
                     # Plot export logic (same as your original code)
                     if tab.xs:
-                        if True in [checker.isChecked() for checker in checkboxes]:
-                            for pos_index in range(4):
-                                if checkboxes[pos_index].isChecked():
-                                    plt.figure(figsize=(10, 6))
-                                    left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
-                                                 data["Left Sensor y (cm)"] if pos_index == 1 else
-                                                 data["Left Sensor z (cm)"] if pos_index == 2 else
-                                                 data["Left Sensor v (m/s)"]][0]
-                                    right_data = [data["Right Sensor x (cm)"] if pos_index == 0 else
-                                                 data["Right Sensor y (cm)"] if pos_index == 1 else
-                                                 data["Right Sensor z (cm)"] if pos_index == 2 else
-                                                 data["Right Sensor v (m/s)"]][0]
+                        for pos_index in [index for index in range(len(checkboxes)) if checkboxes[index].isChecked()]:
+                            plt.figure(figsize=(10, 6))
+                            left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
+                                         data["Left Sensor y (cm)"] if pos_index == 1 else
+                                         data["Left Sensor z (cm)"] if pos_index == 2 else
+                                         data["Left Sensor v (m/s)"]][0]
+                            right_data = [data["Right Sensor x (cm)"] if pos_index == 0 else
+                                         data["Right Sensor y (cm)"] if pos_index == 1 else
+                                         data["Right Sensor z (cm)"] if pos_index == 2 else
+                                         data["Right Sensor v (m/s)"]][0]
 
-                                    plt.plot(tab.xs, left_data, label='Left Sensor')
-                                    plt.plot(tab.xs, right_data, label='Right Sensor')
+                            plt.plot(tab.xs, left_data, label='Left Sensor')
+                            plt.plot(tab.xs, right_data, label='Right Sensor')
 
-                                    plt.title(
-                                        f"{'X' if pos_index == 0 else 'Y' if pos_index == 1 else 'Z' if pos_index == 2 else 'Velocity'} Plot")
-                                    plt.xlabel("Time (s)")
-                                    ylabel = ["X Position (cm)" if pos_index == 0 else
-                                              "Y Position (cm)" if pos_index == 0 else
-                                              "Z Position (cm)" if pos_index == 0 else
-                                              "Speed (cm)"][0]
-                                    plt.ylabel(ylabel)
-                                    plt.legend()
-                                    plt.grid(True)
+                            plt.title(
+                                f"{'X' if pos_index == 0 else 'Y' if pos_index == 1 else 'Z' if pos_index == 2 else 'Velocity'} Plot")
+                            plt.xlabel("Time (s)")
+                            ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (cm)"][pos_index]
+                            plt.ylabel(ylabel)
+                            plt.legend()
+                            plt.grid(True)
 
-                                    plot_filename = os.path.join(participant_folder,
-                                                    f"trial_{index + 1}_plot_{['x', 'y', 'z', 'v'][pos_index]}.png")
-                                    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
-                                    plt.close()
-                                    pdf.image(plot_filename, x=None, y=None, w=100)
-                                    pdf.ln(5)
+                            plot_filename = os.path.join(participant_folder,
+                                            f"trial_{index + 1}_plot_{['x', 'y', 'z', 'v'][pos_index]}.png")
+                            plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+                            plt.close()
+                            pdf.image(plot_filename, x=None, y=None, w=100)
+                            pdf.ln(5)
 
-            self.show_progress_dialog("Exporting to Excel...", 300)
+            #self.show_progress_dialog("Exporting to Excel...", 300)
 
             def process_tabs():
                 try:
