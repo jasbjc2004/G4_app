@@ -3,10 +3,10 @@ import random
 import sys
 import time
 from math import sqrt
-import concurrent.futures
 import pandas as pd
 from fpdf import FPDF
 from enum import Enum
+import serial
 
 from PySide6.QtWidgets import (
     QApplication, QVBoxLayout, QMainWindow, QWidget, QPushButton,
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QComboBox, QToolBar, QStatusBar, QTabWidget, QSizePolicy,
     QFileDialog, QDialog, QProgressDialog, QCheckBox, QDialogButtonBox,
 )
-from PySide6.QtGui import QAction, QPainter, QColor
+from PySide6.QtGui import QAction, QPainter, QColor, QPixmap
 from PySide6.QtCore import Qt, QDate, QSize, QTimer, Property, QObject, QThread, Signal
 from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
@@ -23,10 +23,23 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from G4Track import get_frame_data, initialize_system, set_units, get_active_hubs, increment, close_sensor
 from data_processing import calibration_to_center
 
+from scipy import signal
+
 MAX_TRAILS = 21
+
 READ_SAMPLE = True
 BEAUTY_SPEED = True
+SERIAL_BUTTON = False
+
 MAX_ATTEMPTS = 10
+
+MAX_HEIGHT_NEEDED = 3 #cm
+
+fs = 120
+fc = 10
+
+ORDER_FILTER = 2 #4
+SPEED_FILTER = True
 
 
 # thread setup
@@ -148,12 +161,14 @@ class SetUp(QDialog):
                                       QMessageBox.Yes | QMessageBox.Cancel)
             if ret == QMessageBox.Yes:
                 num_trials = self.combo_box.currentData()
-                self.mainwindow = MainWindow(num_trials)
+                self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
+                                             self.date_input.text(), num_trials, self.notes_input.toPlainText().strip())
                 self.mainwindow.show()
                 self.close()
         else:
             num_trials = self.combo_box.currentData()
-            self.mainwindow = MainWindow(num_trials)
+            self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
+                                         self.date_input.text(), num_trials, self.notes_input.toPlainText().strip())
             self.mainwindow.show()
             self.close()
 
@@ -242,11 +257,20 @@ class TrailTab(QWidget):
         self.start_time = None
         self.trial_state = TrialState.not_started
 
+        self.xt = False
+        self.yt = False
+        self.zt = False
+        self.vt = True
+
         self.pos_left = [0, 0, 0]
         self.pos_right = [0, 0, 0]
         self.xs = []
         self.log_left_plot = []
         self.log_right_plot = []
+
+        self.event_log = [0]*8
+        #self.event_log[-1] = 4
+        self.event_8 = None
 
         self.plot_left_data = []
         self.plot_right_data = []
@@ -354,6 +378,19 @@ class TrailTab(QWidget):
     def read_sensor_data(self):
         elapsed_time = time.time() - self.start_time
 
+        main_window = self.window()
+        button_pressed = False
+        if isinstance(main_window, MainWindow) & SERIAL_BUTTON:
+            line = '1'
+            while main_window.button.in_waiting > 0:
+                line = main_window.button.readline().decode('utf-8').rstrip()
+
+            #print(f"Received from Arduino: {line}")
+            if line == '0':
+                self.stop_reading()
+                main_window.tab_widget.tabBar().setEnabled(True)
+                button_pressed = True
+
         if not READ_SAMPLE:
             main_window = self.window()
 
@@ -372,38 +409,108 @@ class TrailTab(QWidget):
             self.pos_left = pos1
             self.pos_right = pos2
 
-            return elapsed_time, pos1, pos2
+            return elapsed_time, pos1, pos2, button_pressed
         elif BEAUTY_SPEED:
             if elapsed_time < 5:
-                return elapsed_time, [0, 0, -elapsed_time], [0, elapsed_time, 0]
+                return elapsed_time, [0, 0, -elapsed_time], [0, elapsed_time, 0], button_pressed
             elif elapsed_time < 10:
-                return elapsed_time, [0, 0, -5 + (elapsed_time - 5)], [0, 5 - (elapsed_time - 5), 0]
-            elif (elapsed_time < 15):
-                return elapsed_time, [0, 0, -5 * (elapsed_time - 10)], [0, 5 * (elapsed_time - 10), 0]
-            elif (elapsed_time < 20):
-                return elapsed_time, [0, 0, -25+5 * (elapsed_time - 15)], [0, 25-5 * (elapsed_time - 15), 0]
-            return elapsed_time, [0] * 3, [0] * 3
+                return elapsed_time, [0, 0, -5 + (elapsed_time - 5)], [0, 5 - (elapsed_time - 5), 0], button_pressed
+            elif elapsed_time < 15:
+                return elapsed_time, [0, 0, -5 * (elapsed_time - 10)], [0, 5 * (elapsed_time - 10), 0], button_pressed
+            elif elapsed_time < 20:
+                return elapsed_time, [0, 0, -25+5 * (elapsed_time - 15)], \
+                    [0, 25-5 * (elapsed_time - 15), 0], button_pressed
+
+            return elapsed_time, [0] * 3, [0] * 3, button_pressed
         else:
             return elapsed_time, [random.randint(-20, 20), random.randint(0, 20), random.randint(-20, 0)], \
-                                 [random.randint(0, 20), random.randint(0, 20), random.randint(-20, 0)]
+                                 [random.randint(0, 20), random.randint(0, 20), random.randint(-20, 0)], button_pressed
+
+    def xt_plot(self):
+        self.xt = True
+        self.yt = False
+        self.zt = False
+        self.vt = False
+
+        self.update_axis()
+
+    def yt_plot(self):
+        self.xt = False
+        self.yt = True
+        self.zt = False
+        self.vt = False
+
+        self.update_axis()
+
+    def zt_plot(self):
+        self.xt = False
+        self.yt = False
+        self.zt = True
+        self.vt = False
+
+        self.update_axis()
+
+    def vt_plot(self):
+        self.xt = False
+        self.yt = False
+        self.zt = False
+        self.vt = True
+
+        self.update_axis()
+
+    def process(self, b, a):
+        if SPEED_FILTER:
+            output_left_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_left_plot])
+            output_right_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_right_plot])
+            for index in range(len(self.log_left_plot)):
+                self.log_left_plot[index][3] = output_left_speed[index]
+                self.log_right_plot[index][3] = output_right_speed[index]
+
+        else:
+            output_left_x = signal.filtfilt(b, a, [pos[0] for pos in self.log_left_plot])
+            output_left_y = signal.filtfilt(b, a, [pos[1] for pos in self.log_left_plot])
+            output_left_z = signal.filtfilt(b, a, [pos[2] for pos in self.log_left_plot])
+            output_right_x = signal.filtfilt(b, a, [pos[0] for pos in self.log_right_plot])
+            output_right_y = signal.filtfilt(b, a, [pos[1] for pos in self.log_right_plot])
+            output_right_z = signal.filtfilt(b, a, [pos[2] for pos in self.log_right_plot])
+
+            for index in range(len(self.log_left_plot)):
+                self.log_left_plot[index][0] = output_left_x[index]
+                self.log_right_plot[index][0] = output_right_x[index]
+                self.log_left_plot[index][1] = output_left_y[index]
+                self.log_right_plot[index][1] = output_right_y[index]
+                self.log_left_plot[index][2] = output_left_z[index]
+                self.log_right_plot[index][2] = output_right_z[index]
+
+                if index > 0:
+                    lpos = (self.log_left_plot[index][0], self.log_left_plot[index][1], self.log_left_plot[index][2])
+                    rpos = (self.log_right_plot[index][0], self.log_right_plot[index][1], self.log_right_plot[index][2])
+                    self.log_left_plot[index][3] = self.speed_calculation(lpos, self.xs[index], index, True)
+                    self.log_right_plot[index][3] = self.speed_calculation(rpos, self.xs[index], index, False)
+
+        self.update_axis()
+        QMessageBox.information(self, "Info", "Finished with the processing of the data")
+        main_window = self.window()
+        if isinstance(main_window, MainWindow):
+            main_window.process_action.setEnabled(False)
 
     def update_axis(self):
         main_window = self.window()
 
         if isinstance(main_window, MainWindow):
-            if main_window.xt:
+            if self.xt:
                 self.ax.set_title(f'Trial {self.trial_number + 1} - x-coordinates')
                 self.ax.set_ylabel('X-coordinates (cm)')
 
                 self.plot_left_data = [abs(pos[0]) if main_window.set_abs_value else pos[0] for pos in self.log_left_plot]
                 self.plot_right_data = [pos[0] for pos in self.log_right_plot]
-            elif main_window.yt:
+            elif self.yt:
                 self.ax.set_title(f'Trial {self.trial_number + 1} - y-coordinates')
                 self.ax.set_ylabel('Y-coordinates (cm)')
 
                 self.plot_left_data = [pos[1] for pos in self.log_left_plot]
                 self.plot_right_data = [pos[1] for pos in self.log_right_plot]
-            elif main_window.zt:
+            elif self.zt:
                 self.ax.set_title(f'Trial {self.trial_number + 1} - z-coordinates')
                 self.ax.set_ylabel('Z-coordinates (cm)')
 
@@ -421,6 +528,10 @@ class TrailTab(QWidget):
         self.line2.set_xdata(self.xs)
         self.line2.set_ydata(self.plot_right_data)
 
+        if self.event_8:
+            self.event_8.remove()
+
+
         self.ax.set_xlim(0, 10)
         self.ax.set_ylim(0, 10)
         if self.xs:  # Only adjust if there's data
@@ -437,36 +548,51 @@ class TrailTab(QWidget):
 
             self.ax.set_ylim(min_y, max_y)
 
+        if self.event_log[-1] != 0:
+            if (self.log_left_plot[-1][2] < self.log_right_plot[-1][2]) \
+                    or (self.log_right_plot[-1][2] > MAX_HEIGHT_NEEDED):
+                self.event_8 = self.ax.annotate("", xy=(self.event_log[-1], self.plot_left_data[-1]), xytext=(self.event_log[-1], 0),
+                                 arrowprops=dict(arrowstyle="->", color="green", lw=2))
+            else:
+                self.event_8 = self.ax.annotate("", xy=(self.event_log[-1], self.plot_right_data[-1]), xytext=(self.event_log[-1], 0),
+                                 arrowprops=dict(arrowstyle="->", color="red", lw=2))
+
         # Redraw canvas
         self.canvas.draw()
+
+    def speed_calculation(self, vector, time_val, index, left):
+        if left:
+            return (sqrt(((vector[0] - self.log_left_plot[index-1][0]) / (time_val - self.xs[index- 1])) ** 2 +
+                 ((vector[1] - self.log_left_plot[index-1][1]) / (time_val - self.xs[index-1])) ** 2 +
+                 ((vector[2] - self.log_left_plot[index-1][2]) / (time_val - self.xs[index-1])) ** 2))
+
+        return (sqrt(((vector[0] - self.log_right_plot[index-1][0]) / (time_val - self.xs[index-1])) ** 2 +
+             ((vector[1] - self.log_right_plot[index-1][1]) / (time_val - self.xs[index-1])) ** 2 +
+             ((vector[2] - self.log_right_plot[index-1][2]) / (time_val - self.xs[index-1])) ** 2))
 
     def update_plot(self):
         if self.reading_active and self.trial_state == TrialState.running:
             # Read simulated data
-            time_val, lpos, rpos = self.read_sensor_data()
+            time_val, lpos, rpos, button_pressed = self.read_sensor_data()
             lpos, rpos = list(lpos), list(rpos)
 
             if len(self.log_left_plot) > 0:
-                vl, vr = sqrt(((lpos[0] - self.log_left_plot[-1][0]) / (time_val - self.xs[- 1])) ** 2 +
-                              ((lpos[1] - self.log_left_plot[-1][1]) / (time_val - self.xs[-1])) ** 2 +
-                              ((lpos[2] - self.log_left_plot[-1][2]) / (time_val - self.xs[-1])) ** 2), \
-                         sqrt(((rpos[0] - self.log_right_plot[-1][0]) / (time_val - self.xs[-1])) ** 2 +
-                              ((rpos[1] - self.log_right_plot[-1][1]) / (time_val - self.xs[-1])) ** 2 +
-                              ((rpos[2] - self.log_right_plot[-1][2]) / (time_val - self.xs[-1])) ** 2)
+                vl, vr = self.speed_calculation(lpos, time_val, len(self.log_left_plot), True), \
+                    self.speed_calculation(rpos, time_val, len(self.log_left_plot), False)
             else:
                 vl, vr = 0, 0
 
             y1, y2 = 0, 0
             main_window = self.window()
             if isinstance(main_window, MainWindow):
-                if main_window.xt:
+                if self.xt:
                     if main_window.set_abs_value:
                         y1, y2 = -lpos[0], rpos[0]
                     else:
                         y1, y2 = lpos[0], rpos[0]
-                elif main_window.yt:
+                elif self.yt:
                     y1, y2 = lpos[1], rpos[1]
-                elif main_window.zt:
+                elif self.zt:
                     y1, y2 = -lpos[2], -rpos[2]
                 else:
                     y1, y2 = vl, vr
@@ -487,6 +613,15 @@ class TrailTab(QWidget):
             self.line2.set_xdata(self.xs)
             self.line2.set_ydata(self.plot_right_data)
 
+            if button_pressed:
+                self.event_log[-1] = time_val
+                if (lpos[2] < rpos[2]) or (rpos[2] > MAX_HEIGHT_NEEDED):
+                    self.event_8 = self.ax.annotate("", xy=(time_val, y1), xytext=(time_val, 0),
+                                     arrowprops=dict(arrowstyle="->", color="green", lw=2))
+                else:
+                    self.event_8 = self.ax.annotate("", xy=(time_val, y2), xytext=(time_val, 0),
+                                     arrowprops=dict(arrowstyle="->", color="red", lw=2))
+
             # Adjust axes
             if self.xs:  # Only adjust if there's data
                 self.ax.set_xlim(0, self.xs[-1] + 1)
@@ -506,10 +641,48 @@ class TrailTab(QWidget):
             self.canvas.draw()
 
 
+class Help(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Help")
+        self.setGeometry(200, 200, 400, 400)
+
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+        self.setModal(True)
+
+        layout = QVBoxLayout()
+
+        image_label = QLabel()
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        image_path = (os.path.join(file_directory, "help.png"))
+        pixmap = QPixmap(image_path)
+        scaled_pixmap = pixmap.scaled(500, 500, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        image_label.setPixmap(scaled_pixmap)
+        layout.addWidget(image_label)
+
+        text_label = QLabel()
+        text_label.setText(
+            "Introduction: \n "
+            " The front of the source has to point to the child. If done correctly, \n"
+            " the x-axis on the source face to the child. \n"
+            "For the data on the plot: \n"
+            " The x-axis lays horizontal on the table. \n"
+            " The y-axis is pointing to the source on the table.\n"
+            " The z-axis is pointing to the roof.\n"
+            " The center of this axis is in the middle of both hands")
+        text_label.setWordWrap(True)  # Enable text wrapping
+        text_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        layout.addWidget(text_label)
+
+        self.setLayout(layout)
+
+
 # MainWindow
 class MainWindow(QMainWindow):
-    def __init__(self, num_trials):
+    def __init__(self, id, asses, date, num_trials, notes):
         super().__init__()
+        if SERIAL_BUTTON:
+            self.button = serial.Serial('COM3', 9600, timeout=1)
         self.setWindowTitle("Sensors")
 
         self.first_time = True
@@ -523,14 +696,16 @@ class MainWindow(QMainWindow):
         self.set_automatic = False
         self.progress_dialog = None
 
-        self.xt = False
-        self.yt = False
-        self.zt = False
-        self.vt = True
-
         self.resize(800, 600)
         self.setup(num_trials)
+        self.id_part = id
+        self.assessor = asses
+        self.date = date
         self.num_trials = num_trials
+        self.notes = notes
+
+        w = fc / (fs / 2)
+        self.b, self.a = signal.butter(ORDER_FILTER, w, 'low')
 
     def setup(self, num_trials):
         self.central_widget = QWidget()
@@ -575,22 +750,29 @@ class MainWindow(QMainWindow):
         vt_action = edit_menu.addAction("v(t)-plot")
         vt_action.triggered.connect(self.vt_plot)
 
-        menu_bar.addMenu("Window")
         settings_menu = menu_bar.addMenu("Settings")
         absx_action = settings_menu.addAction("Set absolute values to x-axis")
         absx_action.setCheckable(True)
         absx_action.triggered.connect(lambda: self.plot_absolute_x(absx_action))
+        self.disconnect_action = settings_menu.addAction("Disconnect")
+        self.disconnect_action.setEnabled(False)
+        self.disconnect_action.triggered.connect(lambda: self.disconnecting() )
 
         switch_action = settings_menu.addAction("Switch tab automatically")
         switch_action.setCheckable(True)
         switch_action.triggered.connect(lambda: self.set_automatic_tab(switch_action))
 
-        menu_bar.addMenu("&Help")
+        help_menu = menu_bar.addMenu("&Help")
+        expl_action = help_menu.addAction("Introduction")
+        expl_action.triggered.connect(lambda: self.create_help())
 
         menu_bar.setNativeMenuBar(False)
 
-    def setup_toolbar(self):
+    def create_help(self):
+        popup = Help(self)
+        popup.show()
 
+    def setup_toolbar(self):
         toolbar = QToolBar("My main toolbar")
         toolbar.setIconSize(QSize(16, 16))
         self.addToolBar(toolbar)
@@ -632,6 +814,14 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
+        self.process_action = QAction("Process trial", self)
+        self.process_action.setStatusTip("Process the current trial")
+        self.process_action.setEnabled(False)
+        self.process_action.triggered.connect(lambda: self.process_tab())
+        toolbar.addAction(self.process_action)
+
+        toolbar.addSeparator()
+
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.close)
         toolbar.addAction(quit_action)
@@ -668,20 +858,23 @@ class MainWindow(QMainWindow):
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(False)
+            self.process_action.setEnabled(False)
             return
-
         if tab.trial_state == TrialState.not_started:
             self.start_action.setEnabled(True)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(False)
+            self.process_action.setEnabled(False)
         elif tab.trial_state == TrialState.running:
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(True)
             self.reset_action.setEnabled(False)
+            self.process_action.setEnabled(False)
         elif tab.trial_state == TrialState.completed:
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(True)
+            self.process_action.setEnabled(True)
 
     def start_current_reading(self):
         tab = self.get_tab()
@@ -762,9 +955,20 @@ class MainWindow(QMainWindow):
         self.is_connected = True
         self.connection_action.setEnabled(False)  # Disable connect button after successful connection
         self.calibrate_action.setEnabled(True)
+        self.disconnect_action.setEnabled(True)
         self.statusBar().showMessage("Successfully connected to sensors")
         QMessageBox.information(self, "Success", "Successfully connected to sensors!")
         self.status_widget.set_status("connected")
+        self.update_toolbar()
+
+    def disconnecting(self):
+        self.is_connected = False
+        close_sensor()
+        self.connection_action.setEnabled(True)
+        self.calibrate_action.setEnabled(False)
+        self.disconnect_action.setEnabled(False)
+        self.statusBar().showMessage("Successfully disconnected to sensors")
+        self.status_widget.set_status("disconnected")
         self.update_toolbar()
 
     def calibration(self):
@@ -798,36 +1002,19 @@ class MainWindow(QMainWindow):
         worker_thread.wait()
 
     def xt_plot(self):
-        self.xt = True
-        self.yt = False
-        self.zt = False
-        self.vt = False
-
-        self.get_tab().update_axis()
+        self.get_tab().xt_plot()
 
     def yt_plot(self):
-        self.xt = False
-        self.yt = True
-        self.zt = False
-        self.vt = False
-
-        self.get_tab().update_axis()
+        self.get_tab().yt_plot()
 
     def zt_plot(self):
-        self.xt = False
-        self.yt = False
-        self.zt = True
-        self.vt = False
-
-        self.get_tab().update_axis()
+        self.get_tab().zt_plot()
 
     def vt_plot(self):
-        self.xt = False
-        self.yt = False
-        self.zt = False
-        self.vt = True
+        self.get_tab().vt_plot()
 
-        self.get_tab().update_axis()
+    def process_tab(self):
+        self.get_tab().process(self.b, self.a)
 
     def plot_absolute_x(self, button):
         if button.isChecked():
@@ -849,6 +1036,8 @@ class MainWindow(QMainWindow):
         if ret == QMessageBox.Yes:
             close_sensor()
             event.accept()
+        else:
+            event.ignore()
 
     def download_excel(self):
         while True:
@@ -911,6 +1100,15 @@ class MainWindow(QMainWindow):
             pdf.add_page()
             pdf.set_font("Arial", size=12)
 
+            pdf.set_font("Arial", style="BU", size=16)
+            pdf.cell(0, 10, f"Participant {self.id_part} by assessor {self.assessor} "
+                            f"on {self.date}" if self.id_part and self.assessor else
+                            f"Participant {self.id_part} on {self.date}" if self.id_part else
+                            f"Participant Unknown on {self.date}", ln=True)
+            pdf.set_font("Arial", size=12)
+            pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
+            pdf.multi_cell(0, 8, self.notes if self.notes else "No Additional Notes")
+
             def export_tab(index):
                 QApplication.processEvents()
                 tab = self.tab_widget.widget(index)
@@ -936,7 +1134,6 @@ class MainWindow(QMainWindow):
                     trial_file = os.path.join(participant_folder, f"trial_{index + 1}.xlsx")
                     df.to_excel(trial_file, index=False)
 
-                    # PDF generation logic (same as your original code)
                     pdf.set_font("Arial", style="B", size=14)
                     pdf.cell(0, 10, f"Trial {index + 1}", ln=True)
                     pdf.set_font("Arial", size=12)
@@ -944,7 +1141,6 @@ class MainWindow(QMainWindow):
                     pdf.multi_cell(0, 10, notes if notes else "No Notes")
                     pdf.ln(5)
 
-                    # Plot export logic (same as your original code)
                     if tab.xs:
                         for pos_index in [index for index in range(len(checkboxes)) if checkboxes[index].isChecked()]:
                             plt.figure(figsize=(10, 6))
@@ -957,13 +1153,13 @@ class MainWindow(QMainWindow):
                                          data["Right Sensor z (cm)"] if pos_index == 2 else
                                          data["Right Sensor v (m/s)"]][0]
 
-                            plt.plot(tab.xs, left_data, label='Left Sensor')
-                            plt.plot(tab.xs, right_data, label='Right Sensor')
+                            plt.plot(tab.xs, left_data, label='Left Sensor', color='green')
+                            plt.plot(tab.xs, right_data, label='Right Sensor', color='red')
 
                             plt.title(
                                 f"{'X' if pos_index == 0 else 'Y' if pos_index == 1 else 'Z' if pos_index == 2 else 'Velocity'} Plot")
                             plt.xlabel("Time (s)")
-                            ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (cm)"][pos_index]
+                            ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (cm/s)"][pos_index]
                             plt.ylabel(ylabel)
                             plt.legend()
                             plt.grid(True)
