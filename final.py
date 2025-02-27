@@ -27,13 +27,13 @@ from scipy import signal
 
 MAX_TRAILS = 21
 
-READ_SAMPLE = True
+READ_SAMPLE = False
 BEAUTY_SPEED = True
-SERIAL_BUTTON = False
+SERIAL_BUTTON = True
 
 MAX_ATTEMPTS = 10
 
-MAX_HEIGHT_NEEDED = 3 #cm
+MAX_HEIGHT_NEEDED = 2 #cm
 
 fs = 120
 fc = 10
@@ -380,23 +380,27 @@ class TrailTab(QWidget):
 
         main_window = self.window()
         button_pressed = False
-        if isinstance(main_window, MainWindow) & SERIAL_BUTTON:
-            line = '1'
-            while main_window.button.in_waiting > 0:
-                line = main_window.button.readline().decode('utf-8').rstrip()
+        if (isinstance(main_window, MainWindow)) and SERIAL_BUTTON and (main_window.button is not None):
+            try:
+                line = '1'
+                while main_window.button.in_waiting > 0:
+                    line = main_window.button.readline().decode('utf-8').rstrip()
 
-            #print(f"Received from Arduino: {line}")
-            if line == '0':
-                self.stop_reading()
-                main_window.tab_widget.tabBar().setEnabled(True)
-                button_pressed = True
+                #print(f"Received from Arduino: {line}")
+                if line == '0':
+                    self.stop_reading()
+                    main_window.tab_widget.tabBar().setEnabled(True)
+                    main_window.switch_to_next_tab()
+                    button_pressed = True
+            except serial.SerialException as e:
+                print(f"Failed to connect to COM3: {e}")
 
         if not READ_SAMPLE:
             main_window = self.window()
 
             if isinstance(main_window, MainWindow):
                 if not main_window.is_connected:
-                    return 0, 0, 0
+                    return 0, 0, 0, button_pressed
 
             frame_data, active_count, data_hubs = get_frame_data(main_window.dongle_id, [main_window.hub_id])
 
@@ -404,7 +408,7 @@ class TrailTab(QWidget):
             pos2 = frame_data.G4_sensor_per_hub[main_window.rindex].pos
 
             if tuple(pos1) == (0, 0, 0) or tuple(pos2) == (0, 0, 0):
-                return elapsed_time, [x for x in self.pos_left], [x for x in self.pos_right]
+                return elapsed_time, [x for x in self.pos_left], [x for x in self.pos_right], button_pressed
 
             self.pos_left = pos1
             self.pos_right = pos2
@@ -549,8 +553,8 @@ class TrailTab(QWidget):
             self.ax.set_ylim(min_y, max_y)
 
         if self.event_log[-1] != 0:
-            if (self.log_left_plot[-1][2] < self.log_right_plot[-1][2]) \
-                    or (self.log_right_plot[-1][2] > MAX_HEIGHT_NEEDED):
+            if ((-self.log_left_plot[-1][2] < -self.log_right_plot[-1][2]) and (-self.log_left_plot[-1][2] > MAX_HEIGHT_NEEDED)) \
+                    or (-self.log_right_plot[-1][2] < MAX_HEIGHT_NEEDED):
                 self.event_8 = self.ax.annotate("", xy=(self.event_log[-1], self.plot_left_data[-1]), xytext=(self.event_log[-1], 0),
                                  arrowprops=dict(arrowstyle="->", color="green", lw=2))
             else:
@@ -615,7 +619,7 @@ class TrailTab(QWidget):
 
             if button_pressed:
                 self.event_log[-1] = time_val
-                if (lpos[2] < rpos[2]) or (rpos[2] > MAX_HEIGHT_NEEDED):
+                if ((-lpos[2] < -rpos[2]) and (-lpos[2] > MAX_HEIGHT_NEEDED)) or (-rpos[2] < MAX_HEIGHT_NEEDED):
                     self.event_8 = self.ax.annotate("", xy=(time_val, y1), xytext=(time_val, 0),
                                      arrowprops=dict(arrowstyle="->", color="green", lw=2))
                 else:
@@ -682,7 +686,11 @@ class MainWindow(QMainWindow):
     def __init__(self, id, asses, date, num_trials, notes):
         super().__init__()
         if SERIAL_BUTTON:
-            self.button = serial.Serial('COM3', 9600, timeout=1)
+            try:
+                self.button = serial.Serial('COM3', 9600, timeout=1)
+            except serial.SerialException as e:
+                self.button = None
+                print(f"Failed to connect to COM3: {e}")
         self.setWindowTitle("Sensors")
 
         self.first_time = True
