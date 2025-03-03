@@ -315,7 +315,7 @@ class TrailTab(QWidget):
 
         self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
         self.ax.set_xlabel('Time (s)')
-        self.ax.set_ylabel('Velocity (cm/s)')
+        self.ax.set_ylabel('Speed (m/s)')
         self.ax.grid(True)
 
         self.ax.set_ylim(0, 10)
@@ -522,7 +522,7 @@ class TrailTab(QWidget):
                 self.plot_right_data = [-pos[2] for pos in self.log_right_plot]
             else:
                 self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
-                self.ax.set_ylabel('Velocity (cm/s)')
+                self.ax.set_ylabel('Speed (m/s)')
 
                 self.plot_left_data = [pos[3] for pos in self.log_left_plot]
                 self.plot_right_data = [pos[3] for pos in self.log_right_plot]
@@ -568,11 +568,11 @@ class TrailTab(QWidget):
         if left:
             return (sqrt(((vector[0] - self.log_left_plot[index-1][0]) / (time_val - self.xs[index- 1])) ** 2 +
                  ((vector[1] - self.log_left_plot[index-1][1]) / (time_val - self.xs[index-1])) ** 2 +
-                 ((vector[2] - self.log_left_plot[index-1][2]) / (time_val - self.xs[index-1])) ** 2))
+                 ((vector[2] - self.log_left_plot[index-1][2]) / (time_val - self.xs[index-1])) ** 2)/100)
 
         return (sqrt(((vector[0] - self.log_right_plot[index-1][0]) / (time_val - self.xs[index-1])) ** 2 +
              ((vector[1] - self.log_right_plot[index-1][1]) / (time_val - self.xs[index-1])) ** 2 +
-             ((vector[2] - self.log_right_plot[index-1][2]) / (time_val - self.xs[index-1])) ** 2))
+             ((vector[2] - self.log_right_plot[index-1][2]) / (time_val - self.xs[index-1])) ** 2)/100)
 
     def update_plot(self):
         if self.reading_active and self.trial_state == TrialState.running:
@@ -685,12 +685,29 @@ class Help(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self, id, asses, date, num_trials, notes):
         super().__init__()
+
+        self.button = None
         if SERIAL_BUTTON:
-            try:
-                self.button = serial.Serial('COM3', 9600, timeout=1)
-            except serial.SerialException as e:
-                self.button = None
-                print(f"Failed to connect to COM3: {e}")
+            available_ports = ['COM%s' % (i + 1) for i in range(12)]
+            found_port = False
+
+            for port in available_ports:
+                try:
+                    if not found_port:
+                        ser_temp = serial.Serial(port, 9600, timeout=1)
+
+                        line = ''
+                        while self.button.in_waiting > 0:
+                            line = self.button.readline().decode('utf-8').rstrip()
+
+                        # print(f"Received from Arduino: {line}")
+                        if line == '1':
+                            self.button = ser_temp
+                            found_port = True
+
+                except serial.SerialException as e:
+                    print(f"Failed to connect to {port}: {e}")
+
         self.setWindowTitle("Sensors")
 
         self.first_time = True
@@ -1167,7 +1184,7 @@ class MainWindow(QMainWindow):
                             plt.title(
                                 f"{'X' if pos_index == 0 else 'Y' if pos_index == 1 else 'Z' if pos_index == 2 else 'Velocity'} Plot")
                             plt.xlabel("Time (s)")
-                            ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (cm/s)"][pos_index]
+                            ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (m/s)"][pos_index]
                             plt.ylabel(ylabel)
                             plt.legend()
                             plt.grid(True)
