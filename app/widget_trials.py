@@ -5,6 +5,7 @@ import pygame
 from enum import Enum
 import serial
 import serial.tools.list_ports
+import threading
 
 
 from PySide6.QtWidgets import (
@@ -21,14 +22,8 @@ from sensor_G4Track import get_frame_data
 from scipy import signal
 
 from window_main_plot import MainWindow
+from constants import READ_SAMPLE, BEAUTY_SPEED, SERIAL_BUTTON, MAX_HEIGHT_NEEDED, SPEED_FILTER
 
-READ_SAMPLE = True
-BEAUTY_SPEED = True
-SERIAL_BUTTON = True
-
-MAX_HEIGHT_NEEDED = 2  # cm
-
-SPEED_FILTER = True
 
 class TrialState(Enum):
     not_started = 0
@@ -36,7 +31,6 @@ class TrialState(Enum):
     completed = 2
 
 
-# Tab window
 class TrailTab(QWidget):
     def __init__(self, trail_number, parent=None):
         super().__init__(parent)
@@ -57,11 +51,12 @@ class TrailTab(QWidget):
         self.log_right_plot = []
 
         self.event_log = [0] * 8
-        # self.event_log[-1] = 4
         self.event_8 = None
 
         self.plot_left_data = []
         self.plot_right_data = []
+
+        self.sound = None
 
         self.setup()
 
@@ -140,6 +135,8 @@ class TrailTab(QWidget):
             if isinstance(main_window, MainWindow):
                 main_window.update_toolbar()
 
+        self.play_music()
+
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
             if self.vt:
@@ -159,6 +156,9 @@ class TrailTab(QWidget):
 
             self.line1.set_data([], [])
             self.line2.set_data([], [])
+
+            self.event_log = [0] * 8
+            self.event_8 = None
 
             self.canvas.draw()
 
@@ -429,15 +429,6 @@ class TrailTab(QWidget):
                     self.event_8 = self.ax.annotate("", xy=(time_val, y2), xytext=(time_val, 0),
                                                     arrowprops=dict(arrowstyle="->", color="red", lw=2))
 
-                pygame.mixer.init()
-                if self.trial_number < 5:
-                    sound = pygame.mixer.Sound('NEEDED/MUSIC/Bumba.mp3')
-                else:
-                    sound = pygame.mixer.Sound('NEEDED/MUSIC/applause.mp3')
-                sound.play()
-                time.sleep(1.5)
-                pygame.mixer.quit()
-
             # Adjust axes
             if self.xs:  # Only adjust if there's data
                 self.ax.set_xlim(0, self.xs[-1] + 1)
@@ -458,4 +449,22 @@ class TrailTab(QWidget):
 
             # Redraw canvas
             self.canvas.draw()
+
+            if button_pressed:
+                self.play_music()
+
+    def play_music(self):
+        main_window = self.window()
+        if isinstance(main_window, MainWindow) and self.sound is None:
+            num_sound = len(main_window.sound)
+            random_sound = random.randint(0, num_sound-1)
+
+            self.sound = main_window.sound[random_sound]
+
+        self.sound.play()
+        timer = threading.Timer(2.0, self.stop_music)
+        timer.start()
+
+    def stop_music(self):
+        pygame.mixer.stop()
 
