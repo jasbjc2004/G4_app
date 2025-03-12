@@ -1,3 +1,6 @@
+import threading
+
+import pygame
 from PySide6.QtWidgets import (
     QVBoxLayout, QPushButton, QLineEdit, QLabel, QHBoxLayout,
     QDateEdit, QTextEdit, QMessageBox, QComboBox, QDialog,
@@ -81,7 +84,22 @@ class SetUp(QDialog):
 
         self.setLayout(main_layout)
 
-    # go to next window + save data
+        self.sound = list()
+        pygame.mixer.init()
+        dir_sound = ('NEEDED/MUSIC/Bumba.mp3',
+                     'NEEDED/MUSIC/applause.mp3',
+                     'NEEDED/MUSIC/Bluey.mp3',
+                     'NEEDED/MUSIC/cheering.mp3',
+                     'NEEDED/MUSIC/bong.mp3')
+
+        threads_sound = [threading.Thread(target=self.load_sound, args=(dir_sound[i],)) for i in range(len(dir_sound))]
+        for i in range(len(threads_sound)):
+            threads_sound[i].daemon = True
+            threads_sound[i].start()
+
+        for t in threads_sound:
+            t.join()
+
     def save_button_pressed(self):
         if self.name_input.text().strip() == "":
             ret = QMessageBox.warning(self, "Warning",
@@ -90,20 +108,27 @@ class SetUp(QDialog):
             if ret == QMessageBox.Yes:
                 num_trials = self.combo_box.currentData()
                 self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
-                                             self.date_input.text(), num_trials, self.notes_input.toPlainText().strip())
+                                             self.date_input.text(), num_trials, self.notes_input.toPlainText().strip(),
+                                             self.sound)
                 self.mainwindow.show()
                 self.close()
         else:
             num_trials = self.combo_box.currentData()
             self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
-                                         self.date_input.text(), num_trials, self.notes_input.toPlainText().strip())
+                                         self.date_input.text(), num_trials, self.notes_input.toPlainText().strip(),
+                                         self.sound)
             self.mainwindow.show()
             self.close()
 
-    # go back to startup window
     def back_button_pressed(self):
         from window_start_up import StartUp
 
         self.startup = StartUp()
         self.startup.show()
         self.close()
+
+    def load_sound(self, dir_sound):
+        if pygame.mixer.get_init():
+            pygame.mixer.init()
+
+        self.sound.append(pygame.mixer.Sound(dir_sound))
