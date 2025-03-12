@@ -2,6 +2,7 @@ import os
 
 import pandas as pd
 import pygame
+import threading
 
 from fpdf import FPDF
 
@@ -20,28 +21,14 @@ from data_processing import calibration_to_center
 
 from scipy import signal
 
-MAX_TRAILS = 21
-MAX_ATTEMPTS = 10
-
-READ_SAMPLE = True
-SERIAL_BUTTON = True
-
-MAX_HEIGHT_NEEDED = 2  # cm
-
-fs = 120
-fc = 10
-
-ORDER_FILTER = 2  # 4
-SPEED_FILTER = True
+from constants import MAX_ATTEMPTS, READ_SAMPLE, SERIAL_BUTTON, fs, fc, ORDER_FILTER
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, id, asses, date, num_trials, notes):
+    def __init__(self, id, asses, date, num_trials, notes, sound=None):
         super().__init__()
 
         self.button_trigger = None
-
-        pygame.mixer.init()
 
         self.setWindowTitle("Sensors")
 
@@ -57,6 +44,7 @@ class MainWindow(QMainWindow):
         self.progress_dialog = None
 
         self.resize(800, 600)
+
         self.setup(num_trials)
         self.id_part = id
         self.assessor = asses
@@ -64,8 +52,14 @@ class MainWindow(QMainWindow):
         self.num_trials = num_trials
         self.notes = notes
 
+        self.sound = sound
+
         w = fc / (fs / 2)
         self.b, self.a = signal.butter(ORDER_FILTER, w, 'low')
+
+        thread_pdf = threading.Thread(target=self.make_pdf())
+        thread_pdf.daemon = True
+        thread_pdf.start()
 
     def setup(self, num_trials):
         from widget_trials import TrailTab
@@ -78,6 +72,9 @@ class MainWindow(QMainWindow):
         self.setup_menubar()
         self.setup_toolbar()
         self.setup_statusbar()
+
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
 
         self.tab_widget = QTabWidget()
         self.tab_widget.currentChanged.connect(self.tab_change_handler)
@@ -401,9 +398,28 @@ class MainWindow(QMainWindow):
                                   QMessageBox.Yes | QMessageBox.Cancel)
         if ret == QMessageBox.Yes:
             close_sensor()
+
+            if not pygame.mixer.get_init():
+                pygame.mixer.quit()
+
             event.accept()
         else:
             event.ignore()
+
+    def make_pdf(self):
+        self.pdf = FPDF()
+        self.pdf.set_auto_page_break(auto=True, margin=15)
+        self.pdf.add_page()
+        self.pdf.set_font("Arial", size=12)
+
+        self.pdf.set_font("Arial", style="BU", size=16)
+        self.pdf.cell(0, 10, f"Participant {self.id_part} by assessor {self.assessor} "
+                        f"on {self.date}" if self.id_part and self.assessor else
+        f"Participant {self.id_part} on {self.date}" if self.id_part else
+        f"Participant Unknown on {self.date}", ln=True)
+        self.pdf.set_font("Arial", size=12)
+        self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
+        self.pdf.multi_cell(0, 8, self.notes if self.notes else "No Additional Notes")
 
     def download_excel(self):
         from widget_trials import TrailTab
@@ -462,21 +478,6 @@ class MainWindow(QMainWindow):
             participant_folder = os.path.join(folder, participant_code.text())
             os.makedirs(participant_folder, exist_ok=True)
 
-            # PDF and export setup
-            pdf = FPDF()
-            pdf.set_auto_page_break(auto=True, margin=15)
-            pdf.add_page()
-            pdf.set_font("Arial", size=12)
-
-            pdf.set_font("Arial", style="BU", size=16)
-            pdf.cell(0, 10, f"Participant {self.id_part} by assessor {self.assessor} "
-                            f"on {self.date}" if self.id_part and self.assessor else
-            f"Participant {self.id_part} on {self.date}" if self.id_part else
-            f"Participant Unknown on {self.date}", ln=True)
-            pdf.set_font("Arial", size=12)
-            pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
-            pdf.multi_cell(0, 8, self.notes if self.notes else "No Additional Notes")
-
             def export_tab(index):
                 QApplication.processEvents()
                 tab = self.tab_widget.widget(index)
@@ -502,12 +503,12 @@ class MainWindow(QMainWindow):
                     trial_file = os.path.join(participant_folder, f"trial_{index + 1}.xlsx")
                     df.to_excel(trial_file, index=False)
 
-                    pdf.set_font("Arial", style="B", size=14)
-                    pdf.cell(0, 10, f"Trial {index + 1}", ln=True)
-                    pdf.set_font("Arial", size=12)
+                    self.pdf.set_font("Arial", style="B", size=14)
+                    self.pdf.cell(0, 10, f"Trial {index + 1}", ln=True)
+                    self.pdf.set_font("Arial", size=12)
                     notes = tab.notes_input.toPlainText().strip()
-                    pdf.multi_cell(0, 10, notes if notes else "No Notes")
-                    pdf.ln(5)
+                    self.pdf.multi_cell(0, 10, notes if notes else "No Notes")
+                    self.pdf.ln(5)
 
                     if tab.xs:
                         for pos_index in [index for index in range(len(checkboxes)) if checkboxes[index].isChecked()]:
@@ -536,8 +537,8 @@ class MainWindow(QMainWindow):
                                                          f"trial_{index + 1}_plot_{['x', 'y', 'z', 'v'][pos_index]}.png")
                             plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
                             plt.close()
-                            pdf.image(plot_filename, x=None, y=None, w=100)
-                            pdf.ln(5)
+                            self.pdf.image(plot_filename, x=None, y=None, w=100)
+                            self.pdf.ln(5)
 
             # self.show_progress_dialog("Exporting to Excel...", 300)
 
@@ -548,7 +549,7 @@ class MainWindow(QMainWindow):
 
                     # Finalize export
                     pdf_file = os.path.join(participant_folder, f"{participant_code.text()}.pdf")
-                    pdf.output(pdf_file)
+                    self.pdf.output(pdf_file)
 
                     self.setEnabled(True)
                     QMessageBox.information(self, "Success", f"Data saved in folder: {participant_folder}")
