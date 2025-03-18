@@ -298,7 +298,7 @@ class MainWindow(QMainWindow):
         self.status_widget.set_status("connecting")
         self.repaint()
         file_directory = (os.path.dirname(os.path.abspath(__file__)))
-        src_cfg_file = (os.path.join(file_directory, "../NEEDED/FILES/first_calibration.g4c"))
+        src_cfg_file = (os.path.join(file_directory, "NEEDED/FILES/first_calibration.g4c"))
 
         connected = False
         self.dongle_id = None
