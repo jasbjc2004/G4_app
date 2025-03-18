@@ -1,7 +1,6 @@
-from G4Track import *
+from constants import MAX_HEIGHT_NEEDED, POSITION_BUTTON
+from sensor_G4Track import *
 import time
-import csv
-import numpy as np
 
 
 def calibration_to_center(sys_id):
@@ -69,3 +68,60 @@ def calibration_to_center(sys_id):
         attempt += 1
 
     return None, None, None, False
+
+
+def calculate_boxhand(pos_left, pos_right):
+    """
+
+    :param pos_left:
+    :param pos_right:
+    :returns:
+        0 if the left hand is the box hand,
+        1 if the right hand is the box hand
+        2 if both hands are used simultaneous, but right pressed
+        3 if both hands are used simultaneous, but left pressed
+        4 if the left hand is not used
+        5 if the right hand is not used
+
+    """
+    counter_left = 3*len(pos_left)/4
+    counter_right = 3*len(pos_right)/4
+    for i in range(-1,-len(pos_left),-1):
+        if pos_left[i][2] < MAX_HEIGHT_NEEDED:
+            counter_left -= 1
+        if pos_right[i][2] < MAX_HEIGHT_NEEDED:
+            counter_right -= 1
+
+        if counter_left <= 0:
+            return 4
+        if counter_right <= 0:
+            return 5
+
+    THRESHOLD = 1
+    mse_both_hands = 0
+    for i in range(-1,-len(pos_left),-1):
+        for i in range(3):
+            if i == 0:
+                mse_both_hands += (-pos_left[-1][i] + pos_right[-1][i]) ** 2 / (3*len(pos_left))
+            else:
+                mse_both_hands += (pos_left[-1][i] - pos_right[-1][i]) ** 2 / (3*len(pos_left))
+
+
+    mse_left = 0
+    mse_right = 0
+    for i in range(3):
+        if i == 0:
+            mse_left += (-pos_left[-1][i] - POSITION_BUTTON[i])**2 / 3
+            mse_right += (pos_right[-1][i] - POSITION_BUTTON[i])**2 / 3
+        else:
+            mse_left += (pos_left[-1][i] - POSITION_BUTTON[i]) ** 2 / 3
+            mse_right += (pos_right[-1][i] - POSITION_BUTTON[i]) ** 2 / 3
+
+    if mse_left >= mse_right:
+        if mse_both_hands < THRESHOLD:
+            return 2
+        return 0
+    else:
+        if mse_both_hands < THRESHOLD:
+            return 3
+        return 1
