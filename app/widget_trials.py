@@ -16,6 +16,7 @@ from PySide6.QtCore import QTimer, QThread
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+from data_processing import calculate_boxhand
 from sensor_G4Track import get_frame_data
 
 from scipy import signal
@@ -49,8 +50,7 @@ class TrailTab(QWidget):
         self.log_right_plot = []
         self.button_pressed = False
 
-        self.event_log = [0] * 8
-        self.event_8 = None
+        self.event_log = [0] * 6
 
         self.plot_left_data = []
         self.plot_right_data = []
@@ -135,7 +135,8 @@ class TrailTab(QWidget):
             if isinstance(main_window, MainWindow):
                 main_window.update_toolbar()
 
-        self.play_music()
+            self.update_plot()
+            self.play_music()
 
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
@@ -157,8 +158,8 @@ class TrailTab(QWidget):
             self.line1.set_data([], [])
             self.line2.set_data([], [])
 
-            self.event_log = [0] * 8
-            self.event_8 = None
+            self.event_log = [0] * 6
+            self.button_pressed = False
 
             self.canvas.draw()
 
@@ -173,7 +174,7 @@ class TrailTab(QWidget):
         self.zt = False
         self.vt = False
 
-        self.update_plot(True)
+        self.update_plot()
 
     def yt_plot(self):
         self.xt = False
@@ -181,7 +182,7 @@ class TrailTab(QWidget):
         self.zt = False
         self.vt = False
 
-        self.update_plot(True)
+        self.update_plot()
 
     def zt_plot(self):
         self.xt = False
@@ -189,7 +190,7 @@ class TrailTab(QWidget):
         self.zt = True
         self.vt = False
 
-        self.update_plot(True)
+        self.update_plot()
 
     def vt_plot(self):
         self.xt = False
@@ -197,17 +198,15 @@ class TrailTab(QWidget):
         self.zt = False
         self.vt = True
 
-        self.update_plot(True)
+        self.update_plot()
 
     def process(self, b, a):
         if SPEED_FILTER:
             output_left_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_left_plot])
             output_right_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_right_plot])
             for index in range(len(self.log_left_plot)):
-                self.log_left_plot[index] = tuple(self.log_left_plot[index][0:3]) + tuple(
-                    output_left_speed[index])
-                self.log_right_plot[index] = tuple(self.log_right_plot[index][0:3]) + tuple(
-                    output_right_speed[index])
+                self.log_left_plot[index] = tuple(self.log_left_plot[index][0:3]) + (output_left_speed[index],)
+                self.log_right_plot[index] = tuple(self.log_right_plot[index][0:3]) + (output_right_speed[index],)
 
         else:
             output_left_x = signal.filtfilt(b, a, [pos[0] for pos in self.log_left_plot])
@@ -231,13 +230,13 @@ class TrailTab(QWidget):
                     self.log_left_plot[index][3] = self.speed_calculation(lpos, self.xs[index], index, True)
                     self.log_right_plot[index][3] = self.speed_calculation(rpos, self.xs[index], index, False)
 
-        self.update_plot(True)
+        self.update_plot()
         QMessageBox.information(self, "Info", "Finished with the processing of the data")
         main_window = self.window()
         if isinstance(main_window, MainWindow):
             main_window.process_action.setEnabled(False)
 
-    def update_plot(self, redraw = False):
+    def update_plot(self):
         main_window = self.window()
 
         if isinstance(main_window, MainWindow):
@@ -258,8 +257,8 @@ class TrailTab(QWidget):
                 self.ax.set_title(f'Trial {self.trial_number + 1} - z-coordinates')
                 self.ax.set_ylabel('Z-coordinates (cm)')
 
-                self.plot_left_data = [-pos[2] for pos in self.log_left_plot]
-                self.plot_right_data = [-pos[2] for pos in self.log_right_plot]
+                self.plot_left_data = [pos[2] for pos in self.log_left_plot]
+                self.plot_right_data = [pos[2] for pos in self.log_right_plot]
             else:
                 self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
                 self.ax.set_ylabel('Speed (m/s)')
@@ -271,9 +270,6 @@ class TrailTab(QWidget):
         self.line1.set_ydata(self.plot_left_data)
         self.line2.set_xdata(self.xs)
         self.line2.set_ydata(self.plot_right_data)
-
-        if self.event_8 and redraw:
-            self.event_8.remove()
 
         self.ax.set_xlim(0, 10)
         if self.vt:
@@ -298,35 +294,41 @@ class TrailTab(QWidget):
 
             self.ax.set_ylim(min_y, max_y)
 
-        if self.event_log[-1] != 0 or self.button_pressed:
-            if ((-self.log_left_plot[-1][2] < -self.log_right_plot[-1][2]) and (
-                    -self.log_left_plot[-1][2] > MAX_HEIGHT_NEEDED)) \
-                    or (-self.log_right_plot[-1][2] < MAX_HEIGHT_NEEDED):
-                self.event_8 = self.ax.annotate("", xy=(self.event_log[-1], self.plot_left_data[-1]),
-                                                xytext=(self.event_log[-1], 0),
-                                                arrowprops=dict(arrowstyle="->", color="green", lw=2))
-            else:
-                self.event_8 = self.ax.annotate("", xy=(self.event_log[-1], self.plot_right_data[-1]),
-                                                xytext=(self.event_log[-1], 0),
-                                                arrowprops=dict(arrowstyle="->", color="red", lw=2))
+        if self.event_log[-1] == 0 and self.button_pressed:
+            self.event_log[-1] = self.xs[-1]
+            boxhand = calculate_boxhand(self.log_left_plot, self.log_right_plot)
+            if boxhand == 0:
+                print('boxhand: left')
+            elif boxhand == 1:
+                print('boxhand: right')
+            elif boxhand == 2:
+                print('same boxhand: right pressed')
+            elif boxhand == 3:
+                print('same boxhand: left pressed')
+            elif boxhand == 4:
+                print('left not used')
+            elif boxhand == 5:
+                print('right not used')
 
         self.canvas.draw()
 
-        if self.button_pressed and not redraw:
-            self.play_music()
+        if self.button_pressed:
+            self.stop_reading()
+            main_window.tab_widget.tabBar().setEnabled(True)
+            main_window.switch_to_next_tab()
 
     def speed_calculation(self, vector, time_val, index, left):
         if len(self.xs) <= 1 or len(self.log_right_plot) <= 1 or len(self.log_left_plot) <= 1:
             return 0
 
         if left:
-            return (sqrt(((vector[0] - self.log_left_plot[index - 1][0]) / (time_val - self.xs[index - 1])) ** 2 +
-                         ((vector[1] - self.log_left_plot[index - 1][1]) / (time_val - self.xs[index - 1])) ** 2 +
-                         ((vector[2] - self.log_left_plot[index - 1][2]) / (time_val - self.xs[index - 1])) ** 2) / 100)
+            return (sqrt(((vector[0] - self.log_left_plot[index - 1][0]) * fs) ** 2 +
+                         ((vector[1] - self.log_left_plot[index - 1][1]) * fs) ** 2 +
+                         ((vector[2] - self.log_left_plot[index - 1][2]) * fs) ** 2) / 100)
 
-        return (sqrt(((vector[0] - self.log_right_plot[index - 1][0]) / (time_val - self.xs[index - 1])) ** 2 +
-                     ((vector[1] - self.log_right_plot[index - 1][1]) / (time_val - self.xs[index - 1])) ** 2 +
-                     ((vector[2] - self.log_right_plot[index - 1][2]) / (time_val - self.xs[index - 1])) ** 2) / 100)
+        return (sqrt(((vector[0] - self.log_right_plot[index - 1][0]) * fs) ** 2 +
+                     ((vector[1] - self.log_right_plot[index - 1][1]) * fs) ** 2 +
+                     ((vector[2] - self.log_right_plot[index - 1][2]) * fs) ** 2) / 100)
 
     """
     def update_plot(self):
@@ -424,10 +426,10 @@ class ReadThread(QThread):
     def __init__(self, parent):
         super().__init__(parent)
 
-        self.stop_read = False
         self.start_time = None
 
     def run(self):
+        self.stop_read = False
         if not self.start_time:
             self.start_time = time.time()
 
@@ -442,10 +444,11 @@ class ReadThread(QThread):
 
     def stop(self):
         self.stop_read = True
+        self.start_time = None
 
     def read_sensor_data(self):
         tab = self.parent()
-        if tab and isinstance( tab, TrailTab ):
+        if tab and isinstance(tab, TrailTab):
             elapsed_time = time.time() - self.start_time
 
             main_window = tab.window()
@@ -459,9 +462,6 @@ class ReadThread(QThread):
                     # print(f"Received from Arduino: {line}")
                     if line == '0':
                         self.stop()
-                        tab.stop_reading()
-                        main_window.tab_widget.tabBar().setEnabled(True)
-                        main_window.switch_to_next_tab()
                         tab.button_pressed = True
                 except serial.SerialException as e:
                     print(f"Failed to connect to COM3: {e}")
@@ -481,8 +481,11 @@ class ReadThread(QThread):
                 if (active_count, data_hubs) == (1, 1):
                     time_now = len(tab.xs) / fs
                     pos1 = tuple(frame_data.G4_sensor_per_hub[main_window.lindex].pos)
+                    pos1 = tuple([pos1[i] if i != 2 else -pos1[i] for i in range(3)])
                     pos1 += (tab.speed_calculation(pos1, time_now, len(tab.xs) - 1, True),)
+
                     pos2 = tuple(frame_data.G4_sensor_per_hub[main_window.rindex].pos)
+                    pos2 = tuple([pos2[i] if i != 2 else -pos2[i] for i in range(3)])
                     pos2 += (tab.speed_calculation(pos2, time_now, len(tab.xs) - 1, False),)
 
                     tab.xs.append(len(tab.xs) / fs)
@@ -490,7 +493,7 @@ class ReadThread(QThread):
                     tab.log_right_plot.append(pos2)
 
             elif BEAUTY_SPEED:
-                elapsed_time = len(tab.xs)*0.002
+                elapsed_time = len(tab.xs) * 0.002
                 tab.xs.append(elapsed_time)
 
                 if elapsed_time < 5:
@@ -527,4 +530,3 @@ class ReadThread(QThread):
                     pos1 + (tab.speed_calculation(pos1, tab.xs[-1], len(tab.xs) - 1, True),))
                 tab.log_right_plot.append(
                     pos2 + (tab.speed_calculation(pos2, tab.xs[-1], len(tab.xs) - 1, False),))
-
