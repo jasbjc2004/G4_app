@@ -97,14 +97,13 @@ def calculate_boxhand(pos_left, pos_right):
         if counter_right <= 0:
             return 5
 
-    THRESHOLD = 1
+    THRESHOLD = 10
     mse_both_hands = 0
-    for i in range(-1,-len(pos_left),-1):
-        for i in range(3):
-            if i == 0:
-                mse_both_hands += (-pos_left[-1][i] + pos_right[-1][i]) ** 2 / (3*len(pos_left))
-            else:
-                mse_both_hands += (pos_left[-1][i] - pos_right[-1][i]) ** 2 / (3*len(pos_left))
+    for time in range(-1,-len(pos_left),-1):
+        for pos in range(1,3):
+            mse_both_hands += (pos_left[time][pos] - pos_right[time][pos]) ** 2 / (3*len(pos_left))
+
+    print(mse_both_hands)
 
 
     mse_left = 0
