@@ -161,6 +161,8 @@ class TrailTab(QWidget):
             self.event_log = [0] * 6
             self.button_pressed = False
 
+            self.notes_input.clear()
+
             self.canvas.draw()
 
             self.trial_state = TrialState.not_started
@@ -298,17 +300,17 @@ class TrailTab(QWidget):
             self.event_log[-1] = self.xs[-1]
             boxhand = calculate_boxhand(self.log_left_plot, self.log_right_plot)
             if boxhand == 0:
-                print('boxhand: left')
+                self.notes_input.append('Left hand is boxhand')
             elif boxhand == 1:
-                print('boxhand: right')
+                self.notes_input.append('Reft hand is boxhand')
             elif boxhand == 2:
-                print('same boxhand: right pressed')
+                self.notes_input.append('Both hands as boxhand, but right pressed')
             elif boxhand == 3:
-                print('same boxhand: left pressed')
+                self.notes_input.append('Both hands as boxhand, but left pressed')
             elif boxhand == 4:
-                print('left not used')
+                self.notes_input.append('Left hand is not used')
             elif boxhand == 5:
-                print('right not used')
+                self.notes_input.append('Right hand is not used')
 
         self.canvas.draw()
 
