@@ -7,11 +7,12 @@ import serial
 import serial.tools.list_ports
 import threading
 
+from PySide6.QtGui import QColor, QTextCursor
 from PySide6.QtWidgets import (
     QVBoxLayout, QWidget, QLabel, QHBoxLayout,
-    QTextEdit, QMessageBox, QSizePolicy
+    QTextEdit, QMessageBox, QSizePolicy, QComboBox
 )
-from PySide6.QtCore import QTimer, QThread
+from PySide6.QtCore import QTimer, QThread, Qt
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -73,13 +74,35 @@ class TrailTab(QWidget):
 
         self.setup_plot()
 
+        self.notes_score_widget = QWidget()
+        self.notes_score_layout = QVBoxLayout(self.notes_score_widget)
+
+        self.score_widget = QWidget()
+        self.score_layout = QHBoxLayout(self.score_widget)
+
+        self.score = QComboBox()
+        self.score.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.score.setMinimumWidth(100)
+        score_label = QLabel("Trial score: ")
+        self.score.addItems([str(i) for i in range(0,4)])
+
+        self.score_layout.addWidget(score_label)
+        self.score_layout.addWidget(self.score)
+        self.score_layout.addStretch(1)
+
+        self.notes_score_layout.addWidget(self.score_widget)
+
         self.notes_widget = QWidget()
         self.notes_layout = QVBoxLayout(self.notes_widget)
+
         self.notes_label = QLabel("Notes:")
         self.notes_input = QTextEdit()
         self.notes_layout.addWidget(self.notes_label)
         self.notes_layout.addWidget(self.notes_input)
-        self.layout_tab.addWidget(self.notes_widget)
+
+        self.notes_score_layout.addWidget(self.notes_widget)
+
+        self.layout_tab.addWidget(self.notes_score_widget)
         self.layout_tab.setStretch(1, 1)
 
         self.animation_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -136,7 +159,6 @@ class TrailTab(QWidget):
                 main_window.update_toolbar()
 
             self.update_plot()
-            self.play_music()
 
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
@@ -161,14 +183,32 @@ class TrailTab(QWidget):
             self.event_log = [0] * 6
             self.button_pressed = False
 
-            self.notes_input.clear()
-
             self.canvas.draw()
+
+            self.remove_added_text()
 
             self.trial_state = TrialState.not_started
             main_window = self.window()
             if isinstance(main_window, MainWindow):
                 main_window.update_toolbar()
+
+    def remove_added_text(self):
+        cursor = self.notes_input.textCursor()
+        cursor.beginEditBlock()
+
+        cursor.movePosition(QTextCursor.Start)
+
+        while not cursor.atEnd():
+            cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor)
+
+            char_color = cursor.charFormat()
+            if char_color.foreground().color() == QColor(Qt.red):
+                cursor.removeSelectedText()
+            else:
+                cursor.movePosition(QTextCursor.Right)
+
+        cursor.endEditBlock()
+        self.notes_input.setTextCursor(cursor)
 
     def xt_plot(self):
         self.xt = True
@@ -299,18 +339,18 @@ class TrailTab(QWidget):
         if self.event_log[-1] == 0 and self.button_pressed:
             self.event_log[-1] = self.xs[-1]
             boxhand = calculate_boxhand(self.log_left_plot, self.log_right_plot)
+            self.notes_input.setTextColor(QColor(Qt.red))
             if boxhand == 0:
-                self.notes_input.append('Left hand is boxhand')
+                self.notes_input.append('Left hand is boxhand', )
             elif boxhand == 1:
                 self.notes_input.append('Reft hand is boxhand')
-            elif boxhand == 2:
-                self.notes_input.append('Both hands as boxhand, but right pressed')
-            elif boxhand == 3:
-                self.notes_input.append('Both hands as boxhand, but left pressed')
+            elif boxhand == 2 or boxhand == 3:
+                self.notes_input.append('Both hands as boxhand')
             elif boxhand == 4:
                 self.notes_input.append('Left hand is not used')
             elif boxhand == 5:
                 self.notes_input.append('Right hand is not used')
+            self.notes_input.setTextColor(QColor(Qt.black))
 
         self.canvas.draw()
 
