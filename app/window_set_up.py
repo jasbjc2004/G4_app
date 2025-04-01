@@ -1,17 +1,20 @@
+import os
 import threading
 
 import pygame
 from PySide6.QtWidgets import (
     QVBoxLayout, QPushButton, QLineEdit, QLabel, QHBoxLayout,
-    QDateEdit, QTextEdit, QMessageBox, QComboBox, QDialog,
+    QDateEdit, QTextEdit, QMessageBox, QComboBox, QDialog, QCheckBox,
 )
 from PySide6.QtCore import QDate
 
 from window_main_plot import MainWindow
 
+import pikepdf
+
 
 class SetUp(QDialog):
-    def __init__(self):
+    def __init__(self, folder=None):
         super().__init__()
 
         main_layout = QVBoxLayout()
@@ -60,6 +63,12 @@ class SetUp(QDialog):
         assessor_layout.addWidget(assessor_label)
         assessor_layout.addWidget(self.assessor_input)
 
+        self.negative_z = QCheckBox(text="Negative z in the data")
+        self.folder = folder
+        if folder:
+            notes_layout.addWidget(self.negative_z)
+            self.load_pdf()
+
         # Add widgets to the form layout
         form_layout.addLayout(name_layout)
         form_layout.addLayout(assessor_layout)
@@ -86,11 +95,11 @@ class SetUp(QDialog):
 
         self.sound = list()
         pygame.mixer.init()
-        dir_sound = ('NEEDED/MUSIC/Bumba.mp3',
-                     'NEEDED/MUSIC/applause.mp3',
-                     'NEEDED/MUSIC/Bluey.mp3',
-                     'NEEDED/MUSIC/cheering.mp3',
-                     'NEEDED/MUSIC/bong.mp3')
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        dir_sound = (os.path.join(file_directory,'NEEDED/MUSIC/Bumba.mp3'),
+                     os.path.join(file_directory,'NEEDED/MUSIC/applause.mp3'),
+                     os.path.join(file_directory,'NEEDED/MUSIC/Bluey.mp3'),
+                     os.path.join(file_directory,'NEEDED/MUSIC/bong.mp3'))
 
         threads_sound = [threading.Thread(target=self.load_sound, args=(dir_sound[i],)) for i in range(len(dir_sound))]
         for i in range(len(threads_sound)):
@@ -99,6 +108,7 @@ class SetUp(QDialog):
 
         for t in threads_sound:
             t.join()
+
 
     def save_button_pressed(self):
         if self.name_input.text().strip() == "":
@@ -109,14 +119,14 @@ class SetUp(QDialog):
                 num_trials = self.combo_box.currentData()
                 self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
                                              self.date_input.text(), num_trials, self.notes_input.toPlainText().strip(),
-                                             self.sound)
+                                             self.sound, self.folder, self.negative_z.isChecked())
                 self.mainwindow.show()
                 self.close()
         else:
             num_trials = self.combo_box.currentData()
             self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
                                          self.date_input.text(), num_trials, self.notes_input.toPlainText().strip(),
-                                         self.sound)
+                                         self.sound, self.folder, self.negative_z.isChecked())
             self.mainwindow.show()
             self.close()
 
@@ -132,3 +142,58 @@ class SetUp(QDialog):
             pygame.mixer.init()
 
         self.sound.append(pygame.mixer.Sound(dir_sound))
+
+    def load_pdf(self):
+        for filename in os.listdir(self.folder):
+            file_path = os.path.join(self.folder, filename)
+
+            if os.path.isdir(file_path):
+                continue
+
+            elif filename.endswith('.pdf'):
+                self.add_data(file_path)
+
+    def add_data(self, file):
+        pdf = pikepdf.Pdf.open(file)
+
+        intro = pdf.pages[0]
+
+        pdf_content = intro.get('/Contents').read_bytes().decode('utf-8')
+        text = pdf_content.split('\n')
+
+        set_values = [0 for i in range(4)]
+        for line in text:
+            if '(' in line:
+                rule_text = line.split('(', 1)[1]
+                rule_text = rule_text[::-1].split(')', 1)[1][::-1]
+
+                if 'Trial 1' in rule_text or 'Trial 1:' in rule_text:
+                    break
+
+                rule_list = rule_text.split()
+                if 'Participant' in rule_list and set_values[0] == 0:
+                    index_part = rule_list.index('Participant')
+                    self.name_input.setText(rule_list[index_part + 1])
+                    set_values[0] = 1
+
+                if 'assessor' in rule_list and set_values[1] == 0:
+                    index_ass = rule_list.index('assessor')
+                    self.assessor_input.setText(rule_list[index_ass + 1])
+                    set_values[1] = 1
+
+                if 'on' in rule_list and set_values[2] == 0:
+                    index_date = rule_list.index('on')
+                    print(rule_list[index_date + 1])
+                    date = QDate.fromString(rule_list[index_date + 1], 'd/MM/yyyy')
+                    print(date.currentDate())
+                    self.date_input.setDate(date)
+                    set_values[2] = 1
+
+                elif 'Total' in rule_list and 'trials:' in rule_list and set_values[3] == 0:
+                    index_num_trials = rule_list.index('trials:')
+                    self.combo_box.setCurrentIndex(int(rule_list[index_num_trials + 1])-1)
+                    set_values[3] = 1
+
+                else:
+                    if rule_text != 'No Notes':
+                        self.notes_input.append(rule_text)
