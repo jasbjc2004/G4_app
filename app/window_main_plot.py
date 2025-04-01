@@ -1,6 +1,7 @@
 import os
 
 import pandas as pd
+import pikepdf
 import pygame
 import threading
 
@@ -25,7 +26,7 @@ from constants import MAX_ATTEMPTS, READ_SAMPLE, SERIAL_BUTTON, fs, fc, ORDER_FI
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, id, asses, date, num_trials, notes, sound=None):
+    def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False):
         super().__init__()
 
         self.button_trigger = None
@@ -42,8 +43,12 @@ class MainWindow(QMainWindow):
         self.set_abs_value = False
         self.set_automatic = False
         self.progress_dialog = None
+        self.events_present = False
 
         self.resize(800, 600)
+
+        self.folder = folder
+        self.neg_z = neg_z
 
         self.setup(num_trials)
         self.id_part = id
@@ -82,6 +87,9 @@ class MainWindow(QMainWindow):
             tab = TrailTab(i, self.tab_widget)
             self.tab_widget.addTab(tab, f"Trial {i + 1}")
 
+        if self.folder:
+            self.collect_data()
+
         self.main_layout.addWidget(self.tab_widget)
         self.update_toolbar()
 
@@ -113,6 +121,10 @@ class MainWindow(QMainWindow):
         absx_action = settings_menu.addAction("Set absolute values to x-axis")
         absx_action.setCheckable(True)
         absx_action.triggered.connect(lambda: self.plot_absolute_x(absx_action))
+
+        negz_action = settings_menu.addAction("Set the negative value of the z-axis")
+        negz_action.triggered.connect(self.set_negz)
+
         self.disconnect_action = settings_menu.addAction("Disconnect")
         self.disconnect_action.setEnabled(False)
         self.disconnect_action.triggered.connect(lambda: self.disconnecting())
@@ -190,6 +202,13 @@ class MainWindow(QMainWindow):
         self.process_action.triggered.connect(lambda: self.process_tab())
         toolbar.addAction(self.process_action)
 
+        self.event_action = QAction("Events", self)
+        self.event_action.setStatusTip("Calculate the events for all trials")
+        self.event_action.setEnabled(False)
+        self.event_action.triggered.connect(self.process_events)
+        self.event_action.setEnabled(True)
+        toolbar.addAction(self.event_action)
+
         toolbar.addSeparator()
 
         quit_action = QAction("Quit", self)
@@ -212,6 +231,106 @@ class MainWindow(QMainWindow):
     def calibrate_message(self):
         self.statusBar().showMessage("Calibrating the sensors...", 5000)
 
+    def collect_data(self):
+        for filename in os.listdir(self.folder):
+            file_path = os.path.join(self.folder, filename)
+
+            if os.path.isdir(file_path):
+                continue
+
+            elif filename.endswith(('.xlsx', '.xls', '.xlsm')):
+                try:
+                    self.extract_excel(file_path)
+                except:
+                    QMessageBox.critical(self, "Error", f"Failed to get info from: {file_path}!")
+                    continue
+
+            elif filename.endswith('.pdf'):
+                try:
+                    self.add_notes(file_path)
+                except:
+                    QMessageBox.critical(self, "Error", f"Failed to get info from: {file_path}!")
+                    continue
+
+    def extract_excel(self, file):
+        from widget_trials import TrailTab, TrialState
+
+        trial_data = pd.read_excel(file)
+        trial_number = file.split('.')[-2].split('_')[-1]
+
+        tab = self.tab_widget.widget(int(trial_number)-1)
+
+        xs = trial_data.iloc[:, 0].values
+        if isinstance(tab, TrailTab) and len(xs) > 1:
+            tab.trial_state = TrialState.completed
+            self.update_toolbar()
+
+            tab.xs.clear()
+            tab.log_left_plot.clear()
+            tab.log_right_plot.clear()
+
+            tab.xs = list(xs)
+            x1 = trial_data.iloc[:, 1].values
+            y1 = trial_data.iloc[:, 2].values
+            if not self.neg_z:
+                z1 = trial_data.iloc[:, 3].values
+            else:
+                z1 = -trial_data.iloc[:, 3].values
+            v1 = trial_data.iloc[:, 4].values
+
+            x2 = trial_data.iloc[:, 5].values
+            y2 = trial_data.iloc[:, 6].values
+            if not self.neg_z:
+                z2 = trial_data.iloc[:, 7].values
+            else:
+                z2 = -trial_data.iloc[:, 7].values
+            v2 = trial_data.iloc[:, 8].values
+
+            for i in range(len(x1)):
+                tab.log_left_plot.append( (x1[i], y1[i], z1[i], v1[i], ) )
+                tab.log_right_plot.append( (x2[i], y2[i], z2[i], v2[i],) )
+
+            tab.update_plot(True, self)
+
+    def add_notes(self, file):
+        from widget_trials import TrailTab
+
+        pdf = pikepdf.Pdf.open(file)
+
+        trial_number = 0
+        for page in pdf.pages:
+            pdf_content = page.get('/Contents').read_bytes().decode('utf-8')
+            text = pdf_content.split('\n')
+
+            for line in text:
+                if '(' in line:
+                    rule_text = line.split('(', 1)[1]
+                    rule_text = rule_text[::-1].split(')', 1)[1][::-1]
+
+                    if 'Trial 1' in rule_text and trial_number == 0:
+                        trial_number = 1
+                        tab = self.tab_widget.widget(int(trial_number) - 1)
+                        if isinstance(tab, TrailTab) and 'score' in rule_text:
+                            score = int(rule_text.split()[3])
+
+                            tab.score.setCurrentIndex(score)
+
+                    elif 'Trial' in rule_text and int(rule_text.split()[1][:-1]) == trial_number+1:
+                        trial_number += 1
+
+                        tab = self.tab_widget.widget(int(trial_number) - 1)
+                        if isinstance(tab, TrailTab) and 'score' in rule_text:
+                            score = int(rule_text.split()[3])
+
+                            tab.score.setCurrentIndex(score)
+
+                    elif trial_number == 0:
+                        continue
+
+                    else:
+                        if rule_text != 'No Notes':
+                            tab.notes_input.append(rule_text)
+
     def get_tab(self):
         from widget_trials import TrailTab
 
@@ -219,6 +338,19 @@ class MainWindow(QMainWindow):
         if isinstance(tab, TrailTab):
             return tab
         return None
+
+    def get_tab_score(self):
+        from widget_trials import TrailTab
+
+        scores = []
+
+        for index in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(index)
+
+            if isinstance(tab, TrailTab):
+                scores.append(tab.get_score())
+
+        return scores
 
     def add_another_tab(self):
         from widget_trials import TrailTab
@@ -237,8 +369,7 @@ class MainWindow(QMainWindow):
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(False)
             self.process_action.setEnabled(False)
-            return
-        if tab.trial_state == TrialState.not_started:
+        elif tab.trial_state == TrialState.not_started:
             self.start_action.setEnabled(True)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(False)
@@ -247,11 +378,12 @@ class MainWindow(QMainWindow):
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(True)
             self.reset_action.setEnabled(False)
-            self.process_action.setEnabled(False)
         elif tab.trial_state == TrialState.completed:
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(True)
+            self.process_action.setEnabled(True)
+        if self.folder and tab.xs:
             self.process_action.setEnabled(True)
 
     def start_current_reading(self):
@@ -279,7 +411,7 @@ class MainWindow(QMainWindow):
                 tab.reset_reading()
                 self.update_toolbar()
 
-    def switch_to_next_tab(self, ):
+    def switch_to_next_tab(self):
         if self.set_automatic:
             current_index = self.tab_widget.currentIndex()
             total_tabs = self.tab_widget.count()
@@ -312,6 +444,7 @@ class MainWindow(QMainWindow):
 
         if not connected or self.dongle_id is None:
             QMessageBox.critical(self, "Error", "Failed to connect to sensors after multiple attempts!")
+            close_sensor()
             self.status_widget.set_status("disconnected")
             return
 
@@ -320,6 +453,7 @@ class MainWindow(QMainWindow):
         except:
             QMessageBox.critical(self, "Error", "Failed to connect to hubs! Please check if they are online")
             self.status_widget.set_status("disconnected")
+            close_sensor()
             self.dongle_id = None
             return
 
@@ -351,7 +485,9 @@ class MainWindow(QMainWindow):
         self.connection_action.setEnabled(True)
         self.calibrate_action.setEnabled(False)
         self.disconnect_action.setEnabled(False)
-        self.statusBar().showMessage("Successfully disconnected to sensors")
+        self.button_trigger = None
+        self.connection_button_action.setEnabled(True)
+        self.statusBar().showMessage("Successfully disconnected to sensors and button")
         self.status_widget.set_status("disconnected")
         self.update_toolbar()
 
@@ -379,12 +515,50 @@ class MainWindow(QMainWindow):
     def process_tab(self):
         self.get_tab().process(self.b, self.a)
 
+    def process_events(self):
+        from widget_trials import TrailTab
+
+        go = False
+        if self.events_present:
+            ret = QMessageBox.warning(self, "Warning",
+                                      "Do you really want to calculate the events again?",
+                                      QMessageBox.Yes | QMessageBox.Cancel)
+            go = (ret == QMessageBox.Yes)
+
+        if not self.events_present or go:
+            for index in range(self.tab_widget.count()):
+                tab = self.tab_widget.widget(index)
+
+                if isinstance(tab, TrailTab) and len(tab.xs) > 0:
+                    tab.calculate_events((self.folder is not None), go)
+
+            self.events_present = True
+
     def plot_absolute_x(self, button):
         if button.isChecked():
             self.set_abs_value = True
         else:
             self.set_abs_value = False
-        self.get_tab().update_axis()
+        self.get_tab().update_plot(True)
+
+    def set_negz(self):
+        from widget_trials import TrailTab
+
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+
+            if isinstance(tab, TrailTab):
+                for index in range(len(tab.log_left_plot)):
+                    temp = list(tab.log_left_plot[index])
+                    temp[2] = -temp[2]
+                    tab.log_left_plot[index] = tuple(temp)
+
+                    temp = list(tab.log_right_plot[index])
+                    temp[2] = -temp[2]
+                    tab.log_right_plot[index] = tuple(temp)
+                print('done')
+
+            tab.update_plot(True)
 
     def set_automatic_tab(self, button):
         if button.isChecked():
@@ -418,8 +592,8 @@ class MainWindow(QMainWindow):
         f"Participant {self.id_part} on {self.date}" if self.id_part else
         f"Participant Unknown on {self.date}", ln=True)
         self.pdf.set_font("Arial", size=12)
-        self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
         self.pdf.multi_cell(0, 8, self.notes if self.notes else "No Additional Notes")
+        self.pdf.cell(0, 10, f"", ln=True)
 
     def download_excel(self):
         from widget_trials import TrailTab
@@ -476,6 +650,11 @@ class MainWindow(QMainWindow):
 
             # Create participant folder
             participant_folder = os.path.join(folder, participant_code.text())
+
+            counter = 0
+            while os.path.exists(participant_folder):
+                counter += 1
+                participant_folder = os.path.join(folder, participant_code.text()+f'({counter})')
             os.makedirs(participant_folder, exist_ok=True)
 
             def export_tab(index):
@@ -488,12 +667,13 @@ class MainWindow(QMainWindow):
                         "Time (s)": tab.xs if tab.xs else [],
                         "Left Sensor x (cm)": [pos[0] for pos in tab.log_left_plot] if tab.xs else [],
                         "Left Sensor y (cm)": [pos[1] for pos in tab.log_left_plot] if tab.xs else [],
-                        "Left Sensor z (cm)": [-pos[2] for pos in tab.log_left_plot] if tab.xs else [],
+                        "Left Sensor z (cm)": [pos[2] for pos in tab.log_left_plot] if tab.xs else [],
                         "Left Sensor v (m/s)": [pos[3] for pos in tab.log_left_plot] if tab.xs else [],
                         "Right Sensor x (cm)": [pos[0] for pos in tab.log_right_plot] if tab.xs else [],
                         "Right Sensor y (cm)": [pos[1] for pos in tab.log_right_plot] if tab.xs else [],
-                        "Right Sensor z (cm)": [-pos[2] for pos in tab.log_right_plot] if tab.xs else [],
+                        "Right Sensor z (cm)": [pos[2] for pos in tab.log_right_plot] if tab.xs else [],
                         "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right_plot] if tab.xs else [],
+                        "Score: ": [tab.get_score()]
                     }
                     max_length = max(len(v) for v in data.values())
                     for key in data:
@@ -504,7 +684,7 @@ class MainWindow(QMainWindow):
                     df.to_excel(trial_file, index=False)
 
                     self.pdf.set_font("Arial", style="B", size=14)
-                    self.pdf.cell(0, 10, f"Trial {index + 1}", ln=True)
+                    self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()}' if tab.xs else ''}", ln=True)
                     self.pdf.set_font("Arial", size=12)
                     notes = tab.notes_input.toPlainText().strip()
                     self.pdf.multi_cell(0, 10, notes if notes else "No Notes")
@@ -535,15 +715,15 @@ class MainWindow(QMainWindow):
 
                             plot_filename = os.path.join(participant_folder,
                                                          f"trial_{index + 1}_plot_{['x', 'y', 'z', 'v'][pos_index]}.png")
-                            plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+                            plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
                             plt.close()
                             self.pdf.image(plot_filename, x=None, y=None, w=100)
                             self.pdf.ln(5)
 
-            # self.show_progress_dialog("Exporting to Excel...", 300)
-
             def process_tabs():
                 try:
+                    self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
+
                     for i in range(self.tab_widget.count()):
                         export_tab(i)
 
