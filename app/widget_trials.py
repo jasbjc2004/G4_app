@@ -17,7 +17,7 @@ from PySide6.QtCore import QTimer, QThread, Qt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from data_processing import calculate_boxhand
+from data_processing import calculate_boxhand, calculate_e4_e5
 from sensor_G4Track import get_frame_data
 
 from scipy import signal
@@ -35,6 +35,8 @@ class TrialState(Enum):
 class TrailTab(QWidget):
     def __init__(self, trail_number, parent=None):
         super().__init__(parent)
+        self.case_status = -1
+        self.scatter = None
         self.trial_number = trail_number
         self.reading_active = False
         self.trial_state = TrialState.not_started
@@ -131,8 +133,8 @@ class TrailTab(QWidget):
             self.ax.set_ylim(0, 10)
         self.ax.set_xlim(0, 10)
 
-        self.line1, = self.ax.plot([], [], lw=2, label='Left', color='green')
-        self.line2, = self.ax.plot([], [], lw=2, label='Right', color='red')
+        self.line1, = self.ax.plot([], [], lw=2, label='Left', color='green', zorder=5)
+        self.line2, = self.ax.plot([], [], lw=2, label='Right', color='red', zorder=5)
         self.ax.legend()
 
         self.layout_tab.addWidget(self.canvas)
@@ -158,7 +160,7 @@ class TrailTab(QWidget):
             if isinstance(main_window, MainWindow):
                 main_window.update_toolbar()
 
-            self.update_plot()
+            self.update_plot(True)
 
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
@@ -179,6 +181,7 @@ class TrailTab(QWidget):
 
             self.line1.set_data([], [])
             self.line2.set_data([], [])
+            self.line_events.set_data([], [])
 
             self.event_log = [0] * 6
             self.button_pressed = False
@@ -216,7 +219,7 @@ class TrailTab(QWidget):
         self.zt = False
         self.vt = False
 
-        self.update_plot()
+        self.update_plot(True)
 
     def yt_plot(self):
         self.xt = False
@@ -224,7 +227,7 @@ class TrailTab(QWidget):
         self.zt = False
         self.vt = False
 
-        self.update_plot()
+        self.update_plot(True)
 
     def zt_plot(self):
         self.xt = False
@@ -232,7 +235,7 @@ class TrailTab(QWidget):
         self.zt = True
         self.vt = False
 
-        self.update_plot()
+        self.update_plot(True)
 
     def vt_plot(self):
         self.xt = False
@@ -240,7 +243,7 @@ class TrailTab(QWidget):
         self.zt = False
         self.vt = True
 
-        self.update_plot()
+        self.update_plot(True)
 
     def process(self, b, a):
         if SPEED_FILTER:
@@ -272,92 +275,133 @@ class TrailTab(QWidget):
                     self.log_left_plot[index][3] = self.speed_calculation(lpos, self.xs[index], index, True)
                     self.log_right_plot[index][3] = self.speed_calculation(rpos, self.xs[index], index, False)
 
-        self.update_plot()
+        self.update_plot(True)
         QMessageBox.information(self, "Info", "Finished with the processing of the data")
         main_window = self.window()
         if isinstance(main_window, MainWindow):
             main_window.process_action.setEnabled(False)
 
-    def update_plot(self):
-        main_window = self.window()
-
-        if isinstance(main_window, MainWindow):
-            if self.xt:
-                self.ax.set_title(f'Trial {self.trial_number + 1} - x-coordinates')
-                self.ax.set_ylabel('X-coordinates (cm)')
-
-                self.plot_left_data = [abs(pos[0]) if main_window.set_abs_value else pos[0] for pos in
-                                       self.log_left_plot]
-                self.plot_right_data = [pos[0] for pos in self.log_right_plot]
-            elif self.yt:
-                self.ax.set_title(f'Trial {self.trial_number + 1} - y-coordinates')
-                self.ax.set_ylabel('Y-coordinates (cm)')
-
-                self.plot_left_data = [pos[1] for pos in self.log_left_plot]
-                self.plot_right_data = [pos[1] for pos in self.log_right_plot]
-            elif self.zt:
-                self.ax.set_title(f'Trial {self.trial_number + 1} - z-coordinates')
-                self.ax.set_ylabel('Z-coordinates (cm)')
-
-                self.plot_left_data = [pos[2] for pos in self.log_left_plot]
-                self.plot_right_data = [pos[2] for pos in self.log_right_plot]
+    def update_plot(self, redraw=False, parent=None):
+        if redraw or (self.reading_active and self.trial_state == TrialState.running):
+            if parent:
+                main_window = parent
             else:
-                self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
-                self.ax.set_ylabel('Speed (m/s)')
+                main_window = self.window()
 
-                self.plot_left_data = [pos[3] for pos in self.log_left_plot]
-                self.plot_right_data = [pos[3] for pos in self.log_right_plot]
+            if isinstance(main_window, MainWindow):
+                if self.xt:
+                    self.ax.set_title(f'Trial {self.trial_number + 1} - x-coordinates')
+                    self.ax.set_ylabel('X-coordinates (cm)')
 
-        self.line1.set_xdata(self.xs)
-        self.line1.set_ydata(self.plot_left_data)
-        self.line2.set_xdata(self.xs)
-        self.line2.set_ydata(self.plot_right_data)
+                    self.plot_left_data = [abs(pos[0]) if main_window.set_abs_value else pos[0] for pos in
+                                           self.log_left_plot]
+                    self.plot_right_data = [pos[0] for pos in self.log_right_plot]
+                elif self.yt:
+                    self.ax.set_title(f'Trial {self.trial_number + 1} - y-coordinates')
+                    self.ax.set_ylabel('Y-coordinates (cm)')
 
-        self.ax.set_xlim(0, 10)
-        if self.vt:
-            self.ax.set_ylim(0, 2)
-        else:
-            self.ax.set_ylim(0, 10)
+                    self.plot_left_data = [pos[1] for pos in self.log_left_plot]
+                    self.plot_right_data = [pos[1] for pos in self.log_right_plot]
+                elif self.zt:
+                    self.ax.set_title(f'Trial {self.trial_number + 1} - z-coordinates')
+                    self.ax.set_ylabel('Z-coordinates (cm)')
 
-        if self.xs:
-            self.ax.set_xlim(0, self.xs[-1] + 1)
-
-            max_y = max(max(self.plot_left_data[-200:], default=1),
-                        max(self.plot_right_data[-200:], default=1)) * 1.1
-            min_y = min(min(self.plot_left_data[-200:], default=1),
-                        min(self.plot_right_data[-200:], default=1)) * 1.1
-            if max_y < 10:
-                if self.vt:
-                    max_y = 2
+                    self.plot_left_data = [pos[2] for pos in self.log_left_plot]
+                    self.plot_right_data = [pos[2] for pos in self.log_right_plot]
                 else:
-                    max_y = 10
-            if min_y > 0 or main_window.set_abs_value:
-                min_y = 0
+                    self.ax.set_title(f'Trial {self.trial_number + 1} - velocity plot')
+                    self.ax.set_ylabel('Speed (m/s)')
 
-            self.ax.set_ylim(min_y, max_y)
+                    self.plot_left_data = [pos[3] for pos in self.log_left_plot]
+                    self.plot_right_data = [pos[3] for pos in self.log_right_plot]
 
-        if self.event_log[-1] == 0 and self.button_pressed:
-            self.event_log[-1] = self.xs[-1]
-            boxhand = calculate_boxhand(self.log_left_plot, self.log_right_plot)
+                self.line1.set_xdata(self.xs)
+                self.line1.set_ydata(self.plot_left_data)
+                self.line2.set_xdata(self.xs)
+                self.line2.set_ydata(self.plot_right_data)
+
+                self.ax.set_xlim(0, 10)
+                if self.vt:
+                    self.ax.set_ylim(0, 2)
+                else:
+                    self.ax.set_ylim(0, 10)
+
+                if self.xs:
+                    self.ax.set_xlim(0, self.xs[-1] + 1)
+
+                    max_y = max(max(self.plot_left_data[-200:], default=1),
+                                max(self.plot_right_data[-200:], default=1)) * 1.1
+                    min_y = min(min(self.plot_left_data[-200:], default=1),
+                                min(self.plot_right_data[-200:], default=1)) * 1.1
+                    if max_y < 10:
+                        if self.vt:
+                            max_y = 2
+                        else:
+                            max_y = 10
+                    if min_y > 0 or main_window.set_abs_value:
+                        min_y = 0
+
+                    self.ax.set_ylim(min_y, max_y)
+
+                if self.event_log[-1] != 0:
+                    print(type(self.scatter))
+                    if self.scatter: self.scatter.remove()
+                    self.draw_events()
+
+                self.canvas.draw()
+
+                if self.button_pressed and not redraw:
+                    self.stop_reading()
+                    main_window.tab_widget.tabBar().setEnabled(True)
+                    main_window.switch_to_next_tab()
+                    self.play_music()
+
+    def calculate_events(self, got_folder=False, go=False):
+        if go or (self.event_log[-1] == 0 and (self.button_pressed or READ_SAMPLE or got_folder)):
+            if go: self.remove_added_text()
+            
+            self.event_log[-1] = len(self.xs)-1
+
+            self.case_status = calculate_boxhand(self.log_left_plot, self.log_right_plot)
             self.notes_input.setTextColor(QColor(Qt.red))
-            if boxhand == 0:
-                self.notes_input.append('Left hand is boxhand', )
-            elif boxhand == 1:
-                self.notes_input.append('Reft hand is boxhand')
-            elif boxhand == 2 or boxhand == 3:
-                self.notes_input.append('Both hands as boxhand')
-            elif boxhand == 4:
-                self.notes_input.append('Left hand is not used')
-            elif boxhand == 5:
-                self.notes_input.append('Right hand is not used')
+            notes = ('Left hand is boxhand', 'Right hand is boxhand', 'Both hands as boxhand',
+                     'Both hands as boxhand', 'Left hand is not used', 'Right hand is not used',
+                     'Hands switched, but right pressed', 'Hands switched, but left pressed', )
+            self.notes_input.append(notes[self.case_status] )
+
+            e4, e5 = calculate_e4_e5(self.log_left_plot, self.log_right_plot, self.case_status, self.get_score())
+            self.event_log[3], self.event_log[4] = e4, e5
+            self.notes_input.append(f'The measured data is e4: {e4} and e5: {e5}')
+            self.notes_input.append(f'The time is then for e4: {self.xs[e4]} and e5: {self.xs[e5]}')
+
             self.notes_input.setTextColor(QColor(Qt.black))
 
-        self.canvas.draw()
+            self.update_plot(True)
 
-        if self.button_pressed:
-            self.stop_reading()
-            main_window.tab_widget.tabBar().setEnabled(True)
-            main_window.switch_to_next_tab()
+    def draw_events(self):
+        colors_event = ['blue', 'purple', 'orange', 'yellow', 'pink', 'black']
+        label_events = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6']
+
+        x_positions = [ei / fs for ei in self.event_log]
+        if self.case_status == 0:
+            y_positions = [self.plot_left_data[ei] for ei in self.event_log[:3]]
+            y_positions += [self.plot_right_data[ei] for ei in self.event_log[3:]]
+        elif self.case_status == 1:
+            y_positions = [self.plot_right_data[ei] for ei in self.event_log[:3]]
+            y_positions += [self.plot_left_data[ei] for ei in self.event_log[3:]]
+
+            """
+            elif self.case_status == 2 or self.case_status == 3:
+                self.notes_input.append('Both hands as boxhand')
+            elif self.case_status == 4:
+                self.notes_input.append('Left hand is not used')
+            elif self.case_status == 5:
+                self.notes_input.append('Right hand is not used')
+            """
+        else:
+            return
+
+        self.scatter = self.ax.scatter(x_positions, y_positions, c=colors_event, label=label_events, s=32, zorder=10)
 
     def speed_calculation(self, vector, time_val, index, left):
         if len(self.xs) <= 1 or len(self.log_right_plot) <= 1 or len(self.log_left_plot) <= 1:
@@ -371,6 +415,9 @@ class TrailTab(QWidget):
         return (sqrt(((vector[0] - self.log_right_plot[index - 1][0]) * fs) ** 2 +
                      ((vector[1] - self.log_right_plot[index - 1][1]) * fs) ** 2 +
                      ((vector[2] - self.log_right_plot[index - 1][2]) * fs) ** 2) / 100)
+
+    def get_score(self):
+        return self.score.currentIndex()
 
     """
     def update_plot(self):
