@@ -369,6 +369,9 @@ class TrailTab(QWidget):
                      'Hands switched, but right pressed', 'Hands switched, but left pressed', )
             self.notes_input.append(notes[self.case_status] )
 
+
+            self.notes_input.append( f"Estimated score: {self.get_estimated_score()}" )
+
             e4, e5 = calculate_e4_e5(self.log_left_plot, self.log_right_plot, self.case_status, self.get_score())
             self.event_log[3], self.event_log[4] = e4, e5
             self.notes_input.append(f'The measured data is e4: {e4} and e5: {e5}')
@@ -418,6 +421,18 @@ class TrailTab(QWidget):
 
     def get_score(self):
         return self.score.currentIndex()
+
+    def get_estimated_score(self):
+        if self.case_status <= 1:
+            return 3
+        elif self.case_status <= 3:
+            return 2
+        elif self.case_status <= 5:
+            return 1
+        elif self.case_status <= 7:
+            return 2
+        else:
+            return 0
 
     """
     def update_plot(self):
