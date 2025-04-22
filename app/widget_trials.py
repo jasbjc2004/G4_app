@@ -15,15 +15,20 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QTimer, QThread, Qt
 
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from data_processing import calculate_boxhand, calculate_e4_e5
+from data_processing import calculate_boxhand, calculate_e6, calculate_events
 from sensor_G4Track import get_frame_data
 
 from scipy import signal
 
 from window_main_plot import MainWindow
-from constants import READ_SAMPLE, BEAUTY_SPEED, SERIAL_BUTTON, MAX_HEIGHT_NEEDED, SPEED_FILTER, SENSORS_USED, fs
+from constants import READ_SAMPLE, BEAUTY_SPEED, SERIAL_BUTTON, MAX_HEIGHT_NEEDED, SPEED_FILTER, SENSORS_USED, fs, \
+    NUMBER_EVENTS
+
+COLORS_EVENT = ['blue', 'purple', 'orange', 'yellow', 'pink', 'black']
+LABEL_EVENT = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6']
 
 
 class TrialState(Enum):
@@ -53,7 +58,7 @@ class TrailTab(QWidget):
         self.log_right_plot = []
         self.button_pressed = False
 
-        self.event_log = [0] * 6
+        self.event_log = [0] * NUMBER_EVENTS
 
         self.plot_left_data = []
         self.plot_right_data = []
@@ -68,18 +73,13 @@ class TrailTab(QWidget):
         self.layout_tab = QHBoxLayout()
         self.setLayout(self.layout_tab)
 
-        self.animation_widget = QWidget()
-        self.animation_layout = QVBoxLayout(self.animation_widget)
-        self.animation_widget.setLayout(self.animation_layout)
-        self.layout_tab.addWidget(self.animation_widget)
-        self.layout_tab.setStretch(2, 1)
-
         self.setup_plot()
 
         self.notes_score_widget = QWidget()
         self.notes_score_layout = QVBoxLayout(self.notes_score_widget)
 
         self.score_widget = QWidget()
+        self.score_widget.setMaximumWidth(300)
         self.score_layout = QHBoxLayout(self.score_widget)
 
         self.score = QComboBox()
@@ -104,10 +104,8 @@ class TrailTab(QWidget):
 
         self.notes_score_layout.addWidget(self.notes_widget)
 
-        self.layout_tab.addWidget(self.notes_score_widget)
+        self.layout_tab.addWidget(self.notes_score_widget, 1)
         self.layout_tab.setStretch(1, 1)
-
-        self.animation_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -137,7 +135,16 @@ class TrailTab(QWidget):
         self.line2, = self.ax.plot([], [], lw=2, label='Right', color='red', zorder=5)
         self.ax.legend()
 
-        self.layout_tab.addWidget(self.canvas)
+        legend_elements = [None] * NUMBER_EVENTS
+        for i in range(NUMBER_EVENTS):
+            legend_elements[i] = Line2D([0], [0], marker='o', color='w', markerfacecolor=COLORS_EVENT[i],
+                                        markersize=10, label=LABEL_EVENT[i])
+
+        # Place legend below the plot
+        self.ax.legend(handles=legend_elements, loc='upper center',
+                  bbox_to_anchor=(0.5, -0.12), ncol=6)
+
+        self.layout_tab.addWidget(self.canvas, 2)
         self.figure.tight_layout()
 
     def start_reading(self):
@@ -181,10 +188,11 @@ class TrailTab(QWidget):
 
             self.line1.set_data([], [])
             self.line2.set_data([], [])
-            self.line_events.set_data([], [])
 
-            self.event_log = [0] * 6
+            self.event_log = [0] * NUMBER_EVENTS
             self.button_pressed = False
+
+            self.scatter.remove()
 
             self.canvas.draw()
 
@@ -345,7 +353,10 @@ class TrailTab(QWidget):
 
                 if self.event_log[-1] != 0:
                     print(type(self.scatter))
-                    if self.scatter: self.scatter.remove()
+                    if self.scatter:
+                        for i in range(len(self.scatter)):
+                            self.scatter[i].remove()
+                        self.scatter = []
                     self.draw_events()
 
                 self.canvas.draw()
@@ -360,20 +371,26 @@ class TrailTab(QWidget):
         if go or (self.event_log[-1] == 0 and (self.button_pressed or READ_SAMPLE or got_folder)):
             if go: self.remove_added_text()
             
-            self.event_log[-1] = len(self.xs)-1
+            self.event_log[-1] = calculate_e6(self.xs)
 
             self.case_status = calculate_boxhand(self.log_left_plot, self.log_right_plot)
             self.notes_input.setTextColor(QColor(Qt.red))
             notes = ('Left hand is boxhand', 'Right hand is boxhand', 'Both hands as boxhand',
                      'Both hands as boxhand', 'Left hand is not used', 'Right hand is not used',
                      'Hands switched, but right pressed', 'Hands switched, but left pressed', )
-            self.notes_input.append(notes[self.case_status] )
-
+            self.notes_input.append(notes[self.case_status])
 
             self.notes_input.append( f"Estimated score: {self.get_estimated_score()}" )
 
-            e4, e5 = calculate_e4_e5(self.log_left_plot, self.log_right_plot, self.case_status, self.get_score())
-            self.event_log[3], self.event_log[4] = e4, e5
+            e1, e2, e3, e4, e5 = calculate_events(self.log_left_plot, self.log_right_plot, self.case_status, self.get_score())
+            self.event_log[0], self.event_log[1], self.event_log[2], self.event_log[3], self.event_log[4] = \
+                e1, e2, e3, e4, e5
+
+            self.notes_input.append(f'The measured data is e1: {e1} and e2: {e2}')
+            self.notes_input.append(f'The time is then for e1: {self.xs[e1]} and e2: {self.xs[e2]}')
+            self.notes_input.append(f'The measured data is e3: {e3}')
+            self.notes_input.append(f'The time is then for e3: {self.xs[e3]}')
+            self.notes_input.append('')
             self.notes_input.append(f'The measured data is e4: {e4} and e5: {e5}')
             self.notes_input.append(f'The time is then for e4: {self.xs[e4]} and e5: {self.xs[e5]}')
 
@@ -382,29 +399,20 @@ class TrailTab(QWidget):
             self.update_plot(True)
 
     def draw_events(self):
-        colors_event = ['blue', 'purple', 'orange', 'yellow', 'pink', 'black']
-        label_events = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6']
-
         x_positions = [ei / fs for ei in self.event_log]
-        if self.case_status == 0:
+        if self.case_status in [0, 2, 5, 7]:
             y_positions = [self.plot_left_data[ei] for ei in self.event_log[:3]]
             y_positions += [self.plot_right_data[ei] for ei in self.event_log[3:]]
-        elif self.case_status == 1:
+        elif self.case_status in [1, 3, 4, 6]:
             y_positions = [self.plot_right_data[ei] for ei in self.event_log[:3]]
             y_positions += [self.plot_left_data[ei] for ei in self.event_log[3:]]
-
-            """
-            elif self.case_status == 2 or self.case_status == 3:
-                self.notes_input.append('Both hands as boxhand')
-            elif self.case_status == 4:
-                self.notes_input.append('Left hand is not used')
-            elif self.case_status == 5:
-                self.notes_input.append('Right hand is not used')
-            """
         else:
             return
 
-        self.scatter = self.ax.scatter(x_positions, y_positions, c=colors_event, label=label_events, s=32, zorder=10)
+        self.scatter = []
+        for i in range(NUMBER_EVENTS):
+            self.scatter.append(self.ax.scatter(x_positions[i], y_positions[i],
+                                    c=COLORS_EVENT[i], label=LABEL_EVENT[i], s=32, zorder=15-i))
 
     def speed_calculation(self, vector, time_val, index, left):
         if len(self.xs) <= 1 or len(self.log_right_plot) <= 1 or len(self.log_left_plot) <= 1:
@@ -544,7 +552,7 @@ class ReadThread(QThread):
                 print(f"Error in read_sensor_data: {e}")
                 time.sleep(0.5)
 
-            time.sleep(0.002)
+            time.sleep(1/fs)
 
     def stop(self):
         self.stop_read = True
@@ -597,7 +605,7 @@ class ReadThread(QThread):
                     tab.log_right_plot.append(pos2)
 
             elif BEAUTY_SPEED:
-                elapsed_time = len(tab.xs) * 0.002
+                elapsed_time = len(tab.xs) / fs
                 tab.xs.append(elapsed_time)
 
                 if elapsed_time < 5:
@@ -605,15 +613,15 @@ class ReadThread(QThread):
                     pos2 = (0, elapsed_time, 0,)
 
                 elif elapsed_time < 10:
-                    pos1 = (0, 0, -5 + (elapsed_time - 5),)
+                    pos1 = (0, 0, 5 - (elapsed_time - 5),)
                     pos2 = (0, 5 - (elapsed_time - 5), 0,)
 
                 elif elapsed_time < 15:
-                    pos1 = (0, 0, -5 * (elapsed_time - 10),)
+                    pos1 = (0, 0, 5 * (elapsed_time - 10),)
                     pos2 = (0, 5 * (elapsed_time - 10), 0,)
 
                 elif elapsed_time < 20:
-                    pos1 = (0, 0, -25 + 5 * (elapsed_time - 15),)
+                    pos1 = (0, 0, 25 - 5 * (elapsed_time - 15),)
                     pos2 = (0, 25 - 5 * (elapsed_time - 15), 0,)
 
                 else:
