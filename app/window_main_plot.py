@@ -45,7 +45,7 @@ class MainWindow(QMainWindow):
         self.progress_dialog = None
         self.events_present = False
 
-        self.resize(800, 600)
+        self.resize(1000, 600)
 
         self.folder = folder
         self.neg_z = neg_z
@@ -59,8 +59,9 @@ class MainWindow(QMainWindow):
 
         self.sound = sound
 
-        w = fc / (fs / 2)
-        self.b, self.a = signal.butter(ORDER_FILTER, w, 'low')
+        nyq = 0.5 * fs
+        w = fc / nyq
+        self.b, self.a = signal.butter(ORDER_FILTER, w, 'low', analog=False)
 
         thread_pdf = threading.Thread(target=self.make_pdf())
         thread_pdf.daemon = True
