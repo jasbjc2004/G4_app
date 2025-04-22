@@ -1,5 +1,7 @@
+import numpy as np
+
 from constants import MAX_HEIGHT_NEEDED, POSITION_BUTTON, MAX_LENGTH_NEEDED, MIN_HEIGHT_NEEDED, MIN_LENGTH_NEEDED, \
-    THRESHOLD_BOTH_HANDS, SPEED_THRESHOLD, HEIGHT_BOX, THRESHOLD_CHANGED_HANDS_MEAS
+    THRESHOLD_BOTH_HANDS, SPEED_THRESHOLD, HEIGHT_BOX, THRESHOLD_CHANGED_HANDS_MEAS, fs
 from sensor_G4Track import *
 import time
 
@@ -40,7 +42,7 @@ def calibration_to_center(sys_id):
         # Find reference using the axis on the source
         frame_reference_translation(sys_id, (max(sen1.pos[0], sen2.pos[0]),
                                              (sen1.pos[1] + sen2.pos[1])/2,
-                                             0))
+                                             min(sen1.pos[2], sen2.pos[2])))
 
         frame_reference_orientation(sys_id, (90, 180, 0))
 
@@ -98,9 +100,9 @@ def calculate_boxhand(pos_left, pos_right):
             counter_right -= 1
 
         if pos_left[i][2] > MIN_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] > MIN_LENGTH_NEEDED + start_left[1]:
-            counter_left += 1*len(pos_left)/4
+            counter_left += 1*len(pos_left)/6
         if pos_right[i][2] > MIN_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] > MIN_LENGTH_NEEDED + start_right[1]:
-            counter_right += 1*len(pos_left)/4
+            counter_right += 1*len(pos_left)/6
 
     if counter_left <= 0:
         return 4
@@ -115,7 +117,6 @@ def calculate_boxhand(pos_left, pos_right):
 
         if pos_left[time][2] >= HEIGHT_BOX and pos_right[time][2] >= HEIGHT_BOX:
             counter_change += 1
-
 
     print(mse_both_hands)
 
@@ -143,14 +144,44 @@ def calculate_boxhand(pos_left, pos_right):
         return 1
 
 
-def calculate_e4_e5(pos_left, pos_right, case, score):
-    if case == 0 and score == 3:
+def calculate_events(pos_left, pos_right, case, score):
+    if (case == 0 and score == 3) or ((case == 2 or case == 6) and score == 2) or (case == 5 and score == 1):
         trigger_hand, box_hand = pos_right, pos_left
-    elif case == 1 and score == 3:
+    elif (case == 1 and score == 3) or ((case == 3 or case == 7) and score == 2) or (case == 4 and score == 1):
         trigger_hand, box_hand = pos_left, pos_right
     else:
-        return 0, 0
+        return 0, 0, 0, 0, 0
 
+    e6 = len(pos_left) - 1
+
+    v_th = np.array([pos[3] for pos in trigger_hand])
+    v_bh = np.array([pos[3] for pos in box_hand])
+
+    a_bh = np.array(np.diff(v_bh) * fs)
+
+    # calculating e1
+    e1 = np.argmax(v_bh > 0.05)
+    while e1 > 1 and a_bh[e1] >= 0:
+        e1 -= 1
+    print("e1", e1)
+
+    if score != 3:
+        return e1, 0, 0, 0, 0
+
+    # calculating e2
+    piek_1 = np.argmax(v_bh[e1:e1 + 51]) + e1 - 1
+    print("piek_1 ", piek_1)
+    piek_2 = np.argmax(v_bh[piek_1 + 51:piek_1 + 1001]) + piek_1 + 50 - 1
+    print("piek_2 ", piek_2)
+    e2 = np.argmax(v_bh[piek_1:piek_2]) + piek_1 - 1
+    print("e2 ", e2)
+
+    # calculating e3
+    z_bh = np.array([pos[2] for pos in box_hand])
+    e3 = np.argmax(z_bh[1:e6])
+    print("e3", e3)
+
+    # calculating e4 and e5
     start_trigger = pos_left[0]
     start_box = pos_right[0]
     anticipation = False
@@ -159,26 +190,29 @@ def calculate_e4_e5(pos_left, pos_right, case, score):
     mse_both_hands = 0
 
     for i in range(len(pos_left)):
-        if trigger_hand[i][2] < MAX_HEIGHT_NEEDED + start_trigger[2] and trigger_hand[i][1] < MAX_LENGTH_NEEDED + start_trigger[1] \
-                and not ( box_hand[i][2] < MAX_HEIGHT_NEEDED + start_box[2] and box_hand[i][1] < MAX_LENGTH_NEEDED + start_box[1] ):
+        if trigger_hand[i][2] < MAX_HEIGHT_NEEDED + start_trigger[2] and \
+                trigger_hand[i][1] < MAX_LENGTH_NEEDED + start_trigger[1]:
             e4 = i
 
         for pos in range(1, 3):
             mse_both_hands += (pos_left[i][pos] - pos_right[i][pos]) ** 2 / (3 * len(pos_left))
 
-    if mse_both_hands <= THRESHOLD_BOTH_HANDS*2:
+    if mse_both_hands > THRESHOLD_BOTH_HANDS * 2:
         anticipation = True
         print('anticipation happening')
 
-    v_tr = [pos[3] for pos in trigger_hand]
-
-    while v_tr[e4] >= SPEED_THRESHOLD:
+    while v_th[e4] >= SPEED_THRESHOLD:
         e4 -= 1
 
-    if not anticipation:
-        return e4, e4
+    if anticipation:
+        e5 = e4
+    else:
+        e5 = len(pos_left)-1
+        while v_th[e5] >= SPEED_THRESHOLD:
+            e5 -= 1
 
-    speed_5 = min(v_tr[e4:e4+100])
-    e5 = v_tr[e4:e4+100].index(speed_5)
+    return e1, e2, e3, e4, e5
 
-    return e4, e5
+
+def calculate_e6(xs):
+    return len(xs)-1
