@@ -41,7 +41,7 @@ def calibration_to_center(sys_id):
 
         # Find reference using the axis on the source
         frame_reference_translation(sys_id, (max(sen1.pos[0], sen2.pos[0]),
-                                             (sen1.pos[1] + sen2.pos[1])/2,
+                                             (sen1.pos[1] + sen2.pos[1]) / 2,
                                              min(sen1.pos[2], sen2.pos[2])))
 
         frame_reference_orientation(sys_id, (90, 180, 0))
@@ -91,18 +91,20 @@ def calculate_boxhand(pos_left, pos_right):
     start_left = pos_left[0]
     start_right = pos_right[0]
 
-    counter_left = 7*len(pos_left)/8
-    counter_right = 7*len(pos_right)/8
-    for i in range(-1,-len(pos_left),-1):
+    counter_left = 7 * len(pos_left) / 8
+    counter_right = 7 * len(pos_right) / 8
+    for i in range(-1, -len(pos_left), -1):
         if pos_left[i][2] < MAX_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] < MAX_LENGTH_NEEDED + start_left[1]:
             counter_left -= 1
-        if pos_right[i][2] < MAX_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] < MAX_LENGTH_NEEDED + start_right[1]:
+        if pos_right[i][2] < MAX_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] < MAX_LENGTH_NEEDED + start_right[
+            1]:
             counter_right -= 1
 
         if pos_left[i][2] > MIN_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] > MIN_LENGTH_NEEDED + start_left[1]:
-            counter_left += 1*len(pos_left)/6
-        if pos_right[i][2] > MIN_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] > MIN_LENGTH_NEEDED + start_right[1]:
-            counter_right += 1*len(pos_left)/6
+            counter_left += 1 * len(pos_left) / 6
+        if pos_right[i][2] > MIN_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] > MIN_LENGTH_NEEDED + start_right[
+            1]:
+            counter_right += 1 * len(pos_left) / 6
 
     if counter_left <= 0:
         return 4
@@ -111,11 +113,13 @@ def calculate_boxhand(pos_left, pos_right):
 
     mse_both_hands = 0
     counter_change = 0
-    for time in range(-1,-len(pos_left),-1):
-        for pos in range(1,3):
-            mse_both_hands += (pos_left[time][pos] - pos_right[time][pos]) ** 2 / (3*len(pos_left))
+    for time in range(-1, -len(pos_left), -1):
+        for pos in range(1, 3):
+            mse_both_hands += (pos_left[time][pos] - pos_right[time][pos]) ** 2 / (2 * len(pos_left))
 
-        if pos_left[time][2] >= HEIGHT_BOX and pos_right[time][2] >= HEIGHT_BOX:
+        if pos_left[time][2] >= HEIGHT_BOX and pos_right[time][2] >= HEIGHT_BOX and \
+                pos_left[time][1] > MIN_LENGTH_NEEDED + start_left[1] and \
+                pos_right[time][1] > MIN_LENGTH_NEEDED + start_right[1]:
             counter_change += 1
 
     print(mse_both_hands)
@@ -124,8 +128,8 @@ def calculate_boxhand(pos_left, pos_right):
     mse_right = 0
     for i in range(3):
         if i == 0:
-            mse_left += (-pos_left[-1][i] - POSITION_BUTTON[i])**2 / 3
-            mse_right += (pos_right[-1][i] - POSITION_BUTTON[i])**2 / 3
+            mse_left += (-pos_left[-1][i] - POSITION_BUTTON[i]) ** 2 / 3
+            mse_right += (pos_right[-1][i] - POSITION_BUTTON[i]) ** 2 / 3
         else:
             mse_left += (pos_left[-1][i] - POSITION_BUTTON[i]) ** 2 / 3
             mse_right += (pos_right[-1][i] - POSITION_BUTTON[i]) ** 2 / 3
@@ -173,7 +177,7 @@ def calculate_events(pos_left, pos_right, case, score):
     print("piek_1 ", piek_1)
     piek_2 = np.argmax(v_bh[piek_1 + 51:piek_1 + 1001]) + piek_1 + 50 - 1
     print("piek_2 ", piek_2)
-    e2 = np.argmax(v_bh[piek_1:piek_2]) + piek_1 - 1
+    e2 = np.argmin(v_bh[piek_1:piek_2]) + piek_1 - 1
     print("e2 ", e2)
 
     # calculating e3
@@ -183,36 +187,57 @@ def calculate_events(pos_left, pos_right, case, score):
 
     # calculating e4 and e5
     start_trigger = pos_left[0]
-    start_box = pos_right[0]
-    anticipation = False
+
     e4 = 0
-
-    mse_both_hands = 0
-
     for i in range(len(pos_left)):
         if trigger_hand[i][2] < MAX_HEIGHT_NEEDED + start_trigger[2] and \
                 trigger_hand[i][1] < MAX_LENGTH_NEEDED + start_trigger[1]:
             e4 = i
 
-        for pos in range(1, 3):
-            mse_both_hands += (pos_left[i][pos] - pos_right[i][pos]) ** 2 / (3 * len(pos_left))
-
-    if mse_both_hands > THRESHOLD_BOTH_HANDS * 2:
-        anticipation = True
-        print('anticipation happening')
-
     while v_th[e4] >= SPEED_THRESHOLD:
         e4 -= 1
 
-    if anticipation:
+    e5 = len(pos_left) - 1
+    while v_th[e5] >= SPEED_THRESHOLD:
+        e5 -= 1
+
+    if abs(e5 - e1) < 60:
         e5 = e4
-    else:
-        e5 = len(pos_left)-1
-        while v_th[e5] >= SPEED_THRESHOLD:
-            e5 -= 1
 
     return e1, e2, e3, e4, e5
 
 
 def calculate_e6(xs):
-    return len(xs)-1
+    return len(xs) - 1
+
+
+def calculate_extra_info(events):
+    e1, e2, e3, e4, e5, e6 = events
+
+    # total time = trigger press - start first movement
+    # e5 kan hier gelijk zijn aan e5 dus zoek dat uit
+    tt = (e6 - min(e1, e4)) / fs
+
+    # time box hand = end lid opening - start box hand
+    t_bh = (e3 - e1) / fs
+
+    # time 1st phase of box hand = start opening box - start of box hand
+    t_bh_p1 = (e2 - e1) / fs
+
+    # time 2nd phase of box hand = end of box hand - start opening box
+    t_bh_p2 = (e3 - e2) / fs
+
+    # time trigger hand = trigger press - start trigger hand
+    # rekening houden met e4 en e5
+    t_th = (e6 - e5) / fs
+
+    # temp coupling = end box hand - start trigger hand
+    temp_coupling = (e3 - e5) / fs
+
+    # movement overlap = end lid opening - start trigger hand
+    mov_overlap = ((e3 - e5) / fs) / tt * 100
+
+    # goal synchronization = trigger press - end lid opening
+    goal_sync = (e6 - e3) / fs
+
+    return tt, t_bh, t_bh_p1, t_bh_p2, t_th, temp_coupling, mov_overlap, goal_sync
