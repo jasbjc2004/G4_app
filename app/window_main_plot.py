@@ -1,11 +1,13 @@
+import io
 import os
+import time
 
 import pandas as pd
 import pikepdf
 import pygame
 import threading
 
-from fpdf import FPDF
+import fpdf
 
 from PySide6.QtWidgets import (
     QApplication, QVBoxLayout, QMainWindow, QWidget,
@@ -14,7 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QDialog, QCheckBox, QDialogButtonBox,
 )
 from PySide6.QtGui import QAction
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, QObject, Signal, QThread, QEventLoop, QMutex, QWaitCondition
 from matplotlib import pyplot as plt
 
 from sensor_G4Track import initialize_system, set_units, get_active_hubs, close_sensor
@@ -57,12 +59,16 @@ class MainWindow(QMainWindow):
         self.num_trials = num_trials
         self.notes = notes
 
+        self.thread = None
+        self.worker = None
+
         self.sound = sound
 
         nyq = 0.5 * fs
         w = fc / nyq
         self.b, self.a = signal.butter(ORDER_FILTER, w, 'low', analog=False)
 
+        self.pdf = None
         thread_pdf = threading.Thread(target=self.make_pdf())
         thread_pdf.daemon = True
         thread_pdf.start()
@@ -134,9 +140,15 @@ class MainWindow(QMainWindow):
         switch_action.setCheckable(True)
         switch_action.triggered.connect(lambda: self.set_automatic_tab(switch_action))
 
+        self.new_start_action = settings_menu.addAction("New starting point")
+        self.new_start_action.setEnabled(False)
+        self.new_start_action.triggered.connect(lambda: self.new_startpoint())
+
         help_menu = menu_bar.addMenu("&Help")
         expl_action = help_menu.addAction("Introduction")
         expl_action.triggered.connect(lambda: self.create_help())
+        help_doc_action = help_menu.addAction("Manual")
+        help_doc_action.triggered.connect(lambda: self.show_user_manual())
 
         menu_bar.setNativeMenuBar(False)
 
@@ -144,6 +156,16 @@ class MainWindow(QMainWindow):
         from widget_help import Help
 
         popup = Help(self)
+        popup.show()
+
+    def new_startpoint(self):
+        QMessageBox.information(self, "Information", f"Select a new point on the graph ([ESC] to cancel)")
+        self.get_tab().change_starting_point = True
+
+    def show_user_manual(self):
+        from widget_manual import Manual
+
+        popup = Manual(self)
         popup.show()
 
     def setup_toolbar(self):
@@ -196,12 +218,6 @@ class MainWindow(QMainWindow):
         toolbar.addActions([self.start_action, self.stop_action, self.reset_action])
 
         toolbar.addSeparator()
-
-        self.process_action = QAction("Process trial", self)
-        self.process_action.setStatusTip("Process the current trial")
-        self.process_action.setEnabled(False)
-        self.process_action.triggered.connect(lambda: self.process_tab())
-        toolbar.addAction(self.process_action)
 
         self.event_action = QAction("Events", self)
         self.event_action.setStatusTip("Calculate the events for all trials")
@@ -267,8 +283,8 @@ class MainWindow(QMainWindow):
             self.update_toolbar()
 
             tab.xs.clear()
-            tab.log_left_plot.clear()
-            tab.log_right_plot.clear()
+            tab.log_left.clear()
+            tab.log_right.clear()
 
             tab.xs = list(xs)
             x1 = trial_data.iloc[:, 1].values
@@ -288,8 +304,8 @@ class MainWindow(QMainWindow):
             v2 = trial_data.iloc[:, 8].values
 
             for i in range(len(x1)):
-                tab.log_left_plot.append( (x1[i], y1[i], z1[i], v1[i], ) )
-                tab.log_right_plot.append( (x2[i], y2[i], z2[i], v2[i],) )
+                tab.log_left.append((x1[i], y1[i], z1[i], v1[i],))
+                tab.log_right.append((x2[i], y2[i], z2[i], v2[i],))
 
             tab.update_plot(True, self)
 
@@ -299,6 +315,7 @@ class MainWindow(QMainWindow):
         pdf = pikepdf.Pdf.open(file)
 
         trial_number = 0
+        in_table = False
         for page in pdf.pages:
             pdf_content = page.get('/Contents').read_bytes().decode('utf-8')
             text = pdf_content.split('\n')
@@ -317,6 +334,7 @@ class MainWindow(QMainWindow):
                             tab.score.setCurrentIndex(score)
 
                     elif 'Trial' in rule_text and int(rule_text.split()[1][:-1]) == trial_number+1:
+                        in_table = False
                         trial_number += 1
 
                         tab = self.tab_widget.widget(int(trial_number) - 1)
@@ -328,8 +346,14 @@ class MainWindow(QMainWindow):
                     elif trial_number == 0:
                         continue
 
+                    elif rule_text == 'Table':
+                        in_table = True
+
+                    elif rule_text == 'Average over all trials with score 3':
+                        break
+
                     else:
-                        if rule_text != 'No Notes':
+                        if not in_table and rule_text != 'No Notes':
                             tab.notes_input.append(rule_text)
 
     def get_tab(self):
@@ -369,23 +393,30 @@ class MainWindow(QMainWindow):
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(False)
-            self.process_action.setEnabled(False)
+
         elif tab.trial_state == TrialState.not_started:
             self.start_action.setEnabled(True)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(False)
-            self.process_action.setEnabled(False)
+
+            self.new_start_action.setEnabled(False)
         elif tab.trial_state == TrialState.running:
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(True)
             self.reset_action.setEnabled(False)
+
+            self.new_start_action.setEnabled(False)
         elif tab.trial_state == TrialState.completed:
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(True)
-            self.process_action.setEnabled(True)
-        if self.folder and tab.xs:
-            self.process_action.setEnabled(True)
+
+            self.new_start_action.setEnabled(True)
+
+        if tab.trial_state == TrialState.completed:
+            self.new_start_action.setEnabled(True)
+        else:
+            self.new_start_action.setEnabled(False)
 
     def start_current_reading(self):
         tab = self.get_tab()
@@ -460,7 +491,6 @@ class MainWindow(QMainWindow):
 
         set_units(self.dongle_id)
         self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
-        # increment(self.dongle_id, self.hub_id, (self.lindex, self.rindex), (0.1, 0.1))
 
         if not self.calibration_status:
             QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
@@ -531,6 +561,7 @@ class MainWindow(QMainWindow):
                 tab = self.tab_widget.widget(index)
 
                 if isinstance(tab, TrailTab) and len(tab.xs) > 0:
+                    tab.process(self.b, self.a)
                     tab.calculate_events((self.folder is not None), go)
 
             self.events_present = True
@@ -549,14 +580,14 @@ class MainWindow(QMainWindow):
             tab = self.tab_widget.widget(i)
 
             if isinstance(tab, TrailTab):
-                for index in range(len(tab.log_left_plot)):
-                    temp = list(tab.log_left_plot[index])
+                for index in range(len(tab.log_left)):
+                    temp = list(tab.log_left[index])
                     temp[2] = -temp[2]
-                    tab.log_left_plot[index] = tuple(temp)
+                    tab.log_left[index] = tuple(temp)
 
-                    temp = list(tab.log_right_plot[index])
+                    temp = list(tab.log_right[index])
                     temp[2] = -temp[2]
-                    tab.log_right_plot[index] = tuple(temp)
+                    tab.log_right[index] = tuple(temp)
                 print('done')
 
             tab.update_plot(True)
@@ -572,6 +603,10 @@ class MainWindow(QMainWindow):
                                   "Are you sure you want to quit the application?",
                                   QMessageBox.Yes | QMessageBox.Cancel)
         if ret == QMessageBox.Yes:
+            if self.thread and self.thread.isRunning():
+                self.thread.quit()
+                self.thread.wait()
+
             close_sensor()
 
             if not pygame.mixer.get_init():
@@ -582,7 +617,7 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def make_pdf(self):
-        self.pdf = FPDF()
+        self.pdf = fpdf.FPDF()
         self.pdf.set_auto_page_break(auto=True, margin=15)
         self.pdf.add_page()
         self.pdf.set_font("Arial", size=12)
@@ -597,8 +632,6 @@ class MainWindow(QMainWindow):
         self.pdf.cell(0, 10, f"", ln=True)
 
     def download_excel(self):
-        from widget_trials import TrailTab
-
         while True:
             selection_plot = QDialog(self)
             selection_plot.setWindowTitle("Select graph to save")
@@ -607,9 +640,9 @@ class MainWindow(QMainWindow):
             # Participant code input
             name_layout = QHBoxLayout()
             name_label = QLabel("Participant code:")
-            participant_code = QLineEdit()
+            self.participant_code = QLineEdit()
             name_layout.addWidget(name_label)
-            name_layout.addWidget(participant_code)
+            name_layout.addWidget(self.participant_code)
             layout.addLayout(name_layout)
 
             # Plot selection checkboxes
@@ -620,7 +653,7 @@ class MainWindow(QMainWindow):
                 QCheckBox("The v-plot")
             ]
             for checkbox in checkboxes:
-                checkbox.setChecked(True)
+                checkbox.setChecked(False)
                 layout.addWidget(checkbox)
 
             # Dialog buttons
@@ -636,7 +669,7 @@ class MainWindow(QMainWindow):
             if result == QDialog.Rejected:
                 return
 
-            if not participant_code.text().strip():
+            if not self.participant_code.text().strip():
                 QMessageBox.warning(self, "Warning", "Participant code is required!")
                 continue
 
@@ -646,98 +679,280 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Warning", "No directory selected! Please try again.")
                 return
 
-            # Disable main window during export
-            self.setEnabled(False)
-
             # Create participant folder
-            participant_folder = os.path.join(folder, participant_code.text())
+            self.participant_folder = os.path.join(folder, self.participant_code.text())
 
             counter = 0
-            while os.path.exists(participant_folder):
+            while os.path.exists(self.participant_folder):
                 counter += 1
-                participant_folder = os.path.join(folder, participant_code.text()+f'({counter})')
-            os.makedirs(participant_folder, exist_ok=True)
+                self.participant_folder = os.path.join(folder, self.participant_code.text()+f'({counter})')
+            os.makedirs(self.participant_folder, exist_ok=True)
+            self.name_pdf = self.participant_code.text()
 
-            def export_tab(index):
-                QApplication.processEvents()
-                tab = self.tab_widget.widget(index)
+            if self.thread and self.thread.isRunning():
+                self.thread.quit()
+                self.thread.wait()
 
-                if isinstance(tab, TrailTab):
-                    # Data export logic (same as your original code)
-                    data = {
-                        "Time (s)": tab.xs if tab.xs else [],
-                        "Left Sensor x (cm)": [pos[0] for pos in tab.log_left_plot] if tab.xs else [],
-                        "Left Sensor y (cm)": [pos[1] for pos in tab.log_left_plot] if tab.xs else [],
-                        "Left Sensor z (cm)": [pos[2] for pos in tab.log_left_plot] if tab.xs else [],
-                        "Left Sensor v (m/s)": [pos[3] for pos in tab.log_left_plot] if tab.xs else [],
-                        "Right Sensor x (cm)": [pos[0] for pos in tab.log_right_plot] if tab.xs else [],
-                        "Right Sensor y (cm)": [pos[1] for pos in tab.log_right_plot] if tab.xs else [],
-                        "Right Sensor z (cm)": [pos[2] for pos in tab.log_right_plot] if tab.xs else [],
-                        "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right_plot] if tab.xs else [],
-                        "Score: ": [tab.get_score()]
-                    }
-                    max_length = max(len(v) for v in data.values())
-                    for key in data:
-                        data[key].extend([None] * (max_length - len(data[key])))
+            self.make_progress()
+            self.thread = QThread()
+            self.worker = ProgressionThread(self, self.pdf, self.participant_folder,
+                            [index for index in range(len(checkboxes)) if checkboxes[index].isChecked()])
+            self.worker.moveToThread(self.thread)
 
-                    df = pd.DataFrame(data)
-                    trial_file = os.path.join(participant_folder, f"trial_{index + 1}.xlsx")
-                    df.to_excel(trial_file, index=False)
+            self.worker.pdf_ready_image.connect(self.add_plots_data)
+            self.worker.progress.connect(self.set_progress)
+            self.worker.finished_file.connect(self.finish_export)
+            self.worker.error_occurred.connect(self.show_error)
 
-                    self.pdf.set_font("Arial", style="B", size=14)
-                    self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()}' if tab.xs else ''}", ln=True)
-                    self.pdf.set_font("Arial", size=12)
-                    notes = tab.notes_input.toPlainText().strip()
-                    self.pdf.multi_cell(0, 10, notes if notes else "No Notes")
-                    self.pdf.ln(5)
+            self.thread.started.connect(self.worker.run)
+            self.thread.start()
 
-                    if tab.xs:
-                        for pos_index in [index for index in range(len(checkboxes)) if checkboxes[index].isChecked()]:
-                            plt.figure(figsize=(10, 6))
-                            left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
-                                         data["Left Sensor y (cm)"] if pos_index == 1 else
-                                         data["Left Sensor z (cm)"] if pos_index == 2 else
-                                         data["Left Sensor v (m/s)"]][0]
-                            right_data = [data["Right Sensor x (cm)"] if pos_index == 0 else
-                                          data["Right Sensor y (cm)"] if pos_index == 1 else
-                                          data["Right Sensor z (cm)"] if pos_index == 2 else
-                                          data["Right Sensor v (m/s)"]][0]
-
-                            plt.plot(tab.xs, left_data, label='Left Sensor', color='green')
-                            plt.plot(tab.xs, right_data, label='Right Sensor', color='red')
-
-                            plt.title(
-                                f"{'X' if pos_index == 0 else 'Y' if pos_index == 1 else 'Z' if pos_index == 2 else 'Velocity'} Plot")
-                            plt.xlabel("Time (s)")
-                            ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (m/s)"][pos_index]
-                            plt.ylabel(ylabel)
-                            plt.legend()
-                            plt.grid(True)
-
-                            plot_filename = os.path.join(participant_folder,
-                                                         f"trial_{index + 1}_plot_{['x', 'y', 'z', 'v'][pos_index]}.png")
-                            plt.savefig(plot_filename, dpi=150, bbox_inches='tight')
-                            plt.close()
-                            self.pdf.image(plot_filename, x=None, y=None, w=100)
-                            self.pdf.ln(5)
-
-            def process_tabs():
-                try:
-                    self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
-
-                    for i in range(self.tab_widget.count()):
-                        export_tab(i)
-
-                    # Finalize export
-                    pdf_file = os.path.join(participant_folder, f"{participant_code.text()}.pdf")
-                    self.pdf.output(pdf_file)
-
-                    self.setEnabled(True)
-                    QMessageBox.information(self, "Success", f"Data saved in folder: {participant_folder}")
-                except Exception as e:
-                    QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
-                    self.setEnabled(True)
-
-            # Process tabs and complete export
-            process_tabs()
             break
+
+    def add_plots_data(self, plot_index, xs, left_data, right_data):
+        print('check')
+        buf = io.BytesIO()
+        buf.seek(0)
+
+        plt.plot(xs, left_data, label='Left Sensor', color='green')
+        plt.plot(xs, right_data, label='Right Sensor', color='red')
+
+        plt.title(
+            f"{'X' if plot_index == 0 else 'Y' if plot_index == 1 else 'Z' if plot_index == 2 else 'Velocity'} Plot")
+        plt.xlabel("Time (s)")
+        ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (m/s)"][plot_index]
+        plt.ylabel(ylabel)
+        plt.legend()
+        plt.grid(True)
+
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        plt.close()
+
+        buf.seek(0)
+
+        self.pdf.image(buf, x=None, y=None, w=100)
+        self.pdf.ln(5)
+
+        buf.close()
+        self.worker.condition.wakeAll()
+
+    def make_progress(self):
+        from widget_progression_bar import ProgressionBar
+
+        self.progression = ProgressionBar()
+        self.progression.show()
+
+    def show_error(self, e):
+        QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
+
+    def finish_export(self):
+        print('finish')
+        pdf_file = os.path.join(self.participant_folder, f"{self.name_pdf}.pdf")
+        self.pdf.output(pdf_file)
+
+        self.pdf = None
+        thread_pdf = threading.Thread(target=self.make_pdf())
+        thread_pdf.daemon = True
+        thread_pdf.start()
+
+        QMessageBox.information(self, "Success", f"Data saved in folder: {self.participant_folder}")
+
+    def set_progress(self, value: int):
+        print(f"Progress: {value}")
+        self.progression.set_progress(value)
+
+
+class ProgressionThread(QThread):
+    progress = Signal(int)
+    pdf_ready_image = Signal(int, list, list, list)
+    finished_file = Signal()
+    error_occurred = Signal(str)
+
+    def __init__(self, parent: MainWindow, pdf, part_folder, check):
+        super().__init__()
+
+        self.pdf = pdf
+        self.participant_folder = part_folder
+        self.checkboxes = check
+
+        self.num_trials = parent.num_trials
+        self.main = parent
+        self.counter_progress = 0
+
+        active_tabs = self.count_active_tabs()
+        if len(self.checkboxes) == 0:
+            self.step_progress = 1 / active_tabs * 100
+        else:
+            self.step_progress = 1/(active_tabs*len(self.checkboxes))*100
+
+        self.mutex = QMutex()
+        self.condition = QWaitCondition()
+
+    def count_active_tabs(self):
+        from widget_trials import TrailTab
+
+        counter_active = 0
+        for i in range(self.num_trials):
+            tab = self.main.tab_widget.widget(i)
+
+            if isinstance(tab, TrailTab) and len(tab.xs) > 0:
+                counter_active += 1
+        return counter_active
+
+    def run(self):
+        try:
+            self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
+
+            for i in range(self.num_trials):
+                self.export_tab(i)
+                print(f'here {i}')
+
+            self.pdf.add_page()
+            self.pdf.set_font("Arial", style="B", size=14)
+            self.pdf.cell(0, 10, f"Average over all trials with score 3", ln=True)
+            self.pdf.set_font("Arial", size=12)
+            print(f'here {self.num_trials + 1}')
+
+            self.average_events_info()
+            print(f'here {self.num_trials + 2}')
+
+            self.finished_file.emit()
+
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+    def export_tab(self, index):
+        from widget_trials import TrailTab
+
+        tab = self.main.tab_widget.widget(index)
+
+        if isinstance(tab, TrailTab):
+            data = {
+                "Time (s)": tab.xs if tab.xs else [],
+                "Left Sensor x (cm)": [pos[0] for pos in tab.log_left] if tab.xs else [],
+                "Left Sensor y (cm)": [pos[1] for pos in tab.log_left] if tab.xs else [],
+                "Left Sensor z (cm)": [pos[2] for pos in tab.log_left] if tab.xs else [],
+                "Left Sensor v (m/s)": [pos[3] for pos in tab.log_left] if tab.xs else [],
+                "Right Sensor x (cm)": [pos[0] for pos in tab.log_right] if tab.xs else [],
+                "Right Sensor y (cm)": [pos[1] for pos in tab.log_right] if tab.xs else [],
+                "Right Sensor z (cm)": [pos[2] for pos in tab.log_right] if tab.xs else [],
+                "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right] if tab.xs else [],
+                "Score: ": [tab.get_score()]
+            }
+            max_length = max(len(v) for v in data.values())
+            for key in data:
+                data[key].extend([None] * (max_length - len(data[key])))
+
+            df = pd.DataFrame(data)
+            trial_file = os.path.join(self.participant_folder, f"trial_{index + 1}.xlsx")
+            df.to_excel(trial_file, index=False)
+
+            self.pdf.set_font("Arial", style="B", size=14)
+            self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()}' if tab.xs else ''}", ln=True)
+            self.pdf.set_font("Arial", size=12)
+            notes = tab.notes_input.toPlainText().strip()
+            self.pdf.multi_cell(0, 10, notes if notes else "No Notes")
+            self.pdf.ln(5)
+
+            if tab.xs:
+                for pos_index in self.checkboxes:
+                    left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
+                                 data["Left Sensor y (cm)"] if pos_index == 1 else
+                                 data["Left Sensor z (cm)"] if pos_index == 2 else
+                                 data["Left Sensor v (m/s)"]][0]
+                    right_data = [data["Right Sensor x (cm)"] if pos_index == 0 else
+                                  data["Right Sensor y (cm)"] if pos_index == 1 else
+                                  data["Right Sensor z (cm)"] if pos_index == 2 else
+                                  data["Right Sensor v (m/s)"]][0]
+
+                    print('hello')
+
+                    self.mutex.lock()
+                    self.pdf_ready_image.emit(pos_index, tab.xs, left_data, right_data)
+                    self.condition.wait(self.mutex)
+                    self.mutex.unlock()
+
+                    print('hello')
+
+                    self.counter_progress += self.step_progress
+                    self.progress.emit(round(self.counter_progress))
+
+            if self.counter_progress < (index + 1)*self.step_progress:
+                self.counter_progress += self.step_progress
+                self.progress.emit(round(self.counter_progress))
+
+            print(tab.extra_info_events)
+            if tab.extra_info_events and tab.get_score() == 3:
+                self.pdf.set_font("Arial", style="B", size=12)
+                self.pdf.cell(0, 10, 'Table', ln=True)
+
+                col_widths = [60, 40]
+                self.pdf.set_font('Arial', '', 12)
+
+                data = [
+                    ['Total time', str(round(tab.extra_info_events[0], 2))],
+                    ['Time box hand', str(round(tab.extra_info_events[1], 2))],
+                    ['Time 1e phase BH', str(round(tab.extra_info_events[2], 2))],
+                    ['Time 2e phase BH', str(round(tab.extra_info_events[3], 2))],
+                    ['Time trigger hand', str(round(tab.extra_info_events[4], 2))],
+                    ['Temporal coupling', str(round(tab.extra_info_events[5], 2))],
+                    ['Moment overlap', str(round(tab.extra_info_events[6], 2))],
+                    ['Goal synchronization', str(round(tab.extra_info_events[7], 2))],
+                ]
+
+                for row in data:
+                    self.pdf.set_x(20)
+                    for i, datum in enumerate(row):
+                        self.pdf.cell(col_widths[i], 10, datum, border=1)
+                    self.pdf.ln(10)
+
+    def average_events_info(self):
+        from widget_trials import TrailTab
+
+        average_extra_left = [0] * 8
+        left_counter = 0
+        average_extra_right = [0] * 8
+        right_counter = 0
+
+        for i in range(self.main.tab_widget.count()):
+            tab = self.main.tab_widget.widget(i)
+
+            if isinstance(tab, TrailTab) and len(tab.extra_info_events) > 0:
+                if tab.case_status == 0 and average_extra_left[0] == 0:
+                    average_extra_left = tab.extra_info_events
+                    left_counter = 1
+                elif tab.case_status == 1 and average_extra_right[0] == 0:
+                    average_extra_right = tab.extra_info_events
+                    right_counter = 1
+                elif tab.case_status == 0:
+                    average_extra_left = tuple(
+                        [a + b for a, b in zip(average_extra_left, tab.extra_info_events)])
+                    left_counter += 1
+                elif tab.case_status == 1:
+                    average_extra_right = tuple(
+                        [a + b for a, b in zip(average_extra_right, tab.extra_info_events)])
+                    right_counter += 1
+
+        average_extra_left = tuple([temp / left_counter if left_counter != 0 else 0 for temp in average_extra_left])
+        average_extra_right = tuple([temp / right_counter if right_counter != 0 else 0 for temp in average_extra_right])
+
+        col_widths = [60, 40, 40]
+        self.pdf.set_font('Arial', '', 12)
+
+        data = [
+            ['', 'Left', 'Right'],
+            ['Total time', str(round(average_extra_left[0], 2)), str(round(average_extra_right[0], 2))],
+            ['Time box hand', str(round(average_extra_left[1], 2)), str(round(average_extra_right[1], 2))],
+            ['Time 1e phase BH', str(round(average_extra_left[2], 2)), str(round(average_extra_right[2], 2))],
+            ['Time 2e phase BH', str(round(average_extra_left[3], 2)), str(round(average_extra_right[3], 2))],
+            ['Time trigger hand', str(round(average_extra_left[4], 2)), str(round(average_extra_right[4], 2))],
+            ['Temporal coupling', str(round(average_extra_left[5], 2)), str(round(average_extra_right[5], 2))],
+            ['Moment overlap', str(round(average_extra_left[6], 2)), str(round(average_extra_right[6], 2))],
+            ['Goal synchronization', str(round(average_extra_left[7], 2)), str(round(average_extra_right[7], 2))],
+        ]
+
+        for row in data:
+            self.pdf.set_x(20)
+            for i, datum in enumerate(row):
+                self.pdf.cell(col_widths[i], 10, datum, border=1)
+            self.pdf.ln(10)
