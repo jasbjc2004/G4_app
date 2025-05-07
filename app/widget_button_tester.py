@@ -77,6 +77,7 @@ class ButtonTester(QDialog):
                         if isinstance(self.main_window, MainWindow):
                             self.main_window.button_trigger = ser_temp
                             self.main_window.connection_button_action.setEnabled(False)
+                            self.main_window.disconnect_button_action.setEnabled(True)
 
                         return ser_temp
 
