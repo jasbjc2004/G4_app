@@ -11,7 +11,7 @@ class Help(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Help")
-        self.setGeometry(200, 200, 400, 400)
+        self.setGeometry(400, 200, 400, 400)
 
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         self.setModal(True)
