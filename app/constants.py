@@ -27,3 +27,5 @@ SPEED_THRESHOLD = 0.05
 HEIGHT_BOX = 15
 
 NUMBER_EVENTS = 6
+COLORS_EVENT = ['blue', 'purple', 'orange', 'yellow', 'pink', 'black']
+LABEL_EVENT = ['e1', 'e2', 'e3', 'e4', 'e5', 'e6']
