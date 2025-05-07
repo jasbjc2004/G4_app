@@ -16,15 +16,17 @@ from PySide6.QtWidgets import (
     QFileDialog, QDialog, QCheckBox, QDialogButtonBox,
 )
 from PySide6.QtGui import QAction
-from PySide6.QtCore import QSize, QObject, Signal, QThread, QEventLoop, QMutex, QWaitCondition
+from PySide6.QtCore import QSize, QObject, Signal, QThread, QEventLoop, QMutex, QWaitCondition, Qt
 from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 
 from sensor_G4Track import initialize_system, set_units, get_active_hubs, close_sensor
 from data_processing import calibration_to_center
 
 from scipy import signal
 
-from constants import MAX_ATTEMPTS, READ_SAMPLE, SERIAL_BUTTON, fs, fc, ORDER_FILTER
+from constants import MAX_ATTEMPTS, READ_SAMPLE, SERIAL_BUTTON, fs, fc, ORDER_FILTER, NUMBER_EVENTS, COLORS_EVENT, \
+    LABEL_EVENT
 
 
 class MainWindow(QMainWindow):
@@ -46,6 +48,8 @@ class MainWindow(QMainWindow):
         self.set_automatic = False
         self.progress_dialog = None
         self.events_present = False
+
+        self.first_calibration = True
 
         self.resize(1000, 600)
 
@@ -125,6 +129,13 @@ class MainWindow(QMainWindow):
         vt_action.triggered.connect(self.vt_plot)
 
         settings_menu = menu_bar.addMenu("Settings")
+
+        switch_action = settings_menu.addAction("Switch tab automatically")
+        switch_action.setCheckable(True)
+        switch_action.triggered.connect(lambda: self.set_automatic_tab(switch_action))
+
+        settings_menu.addSeparator()
+
         absx_action = settings_menu.addAction("Set absolute values to x-axis")
         absx_action.setCheckable(True)
         absx_action.triggered.connect(lambda: self.plot_absolute_x(absx_action))
@@ -132,17 +143,31 @@ class MainWindow(QMainWindow):
         negz_action = settings_menu.addAction("Set the negative value of the z-axis")
         negz_action.triggered.connect(self.set_negz)
 
-        self.disconnect_action = settings_menu.addAction("Disconnect")
-        self.disconnect_action.setEnabled(False)
-        self.disconnect_action.triggered.connect(lambda: self.disconnecting())
-
-        switch_action = settings_menu.addAction("Switch tab automatically")
-        switch_action.setCheckable(True)
-        switch_action.triggered.connect(lambda: self.set_automatic_tab(switch_action))
-
         self.new_start_action = settings_menu.addAction("New starting point")
         self.new_start_action.setEnabled(False)
         self.new_start_action.triggered.connect(lambda: self.new_startpoint())
+
+        self.new_end_action = settings_menu.addAction("New end point")
+        self.new_end_action.setEnabled(False)
+        self.new_end_action.triggered.connect(lambda: self.new_endpoint())
+
+        self.process_action = settings_menu.addAction("Filter data")
+        self.process_action.setEnabled(False)
+        self.process_action.triggered.connect(lambda: self.process_tab())
+
+        self.move_events_action = settings_menu.addAction("Move events")
+        self.move_events_action.setEnabled(False)
+        self.move_events_action.triggered.connect(lambda: self.move_events())
+
+        settings_menu.addSeparator()
+
+        self.disconnect_sensor_action = settings_menu.addAction("Disconnect sensors")
+        self.disconnect_sensor_action.setEnabled(False)
+        self.disconnect_sensor_action.triggered.connect(lambda: self.disconnecting_sensors())
+
+        self.disconnect_button_action = settings_menu.addAction("Disconnect button")
+        self.disconnect_button_action.setEnabled(False)
+        self.disconnect_button_action.triggered.connect(lambda: self.disconnecting_button())
 
         help_menu = menu_bar.addMenu("&Help")
         expl_action = help_menu.addAction("Introduction")
@@ -160,7 +185,33 @@ class MainWindow(QMainWindow):
 
     def new_startpoint(self):
         QMessageBox.information(self, "Information", f"Select a new point on the graph ([ESC] to cancel)")
+        self.setFocusPolicy(Qt.StrongFocus)
         self.get_tab().change_starting_point = True
+
+    def new_endpoint(self):
+        QMessageBox.information(self, "Information", f"Select a new point on the graph ([ESC] to cancel)")
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.get_tab().change_end_point = True
+
+    def move_events(self):
+        QMessageBox.information(self, "Information", f"You can move the events freely now on the graph ([ESC] to cancel)")
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.get_tab().change_events = True
+
+    def keyPressEvent(self, event):
+        if (self.get_tab().change_starting_point or self.get_tab().change_end_point or self.get_tab().change_events) and event.key() == Qt.Key.Key_Escape:
+            if self.get_tab().change_starting_point:
+                QMessageBox.information(self, "Success", f"Terminated process to select new start")
+            elif self.get_tab().change_end_point:
+                QMessageBox.information(self, "Success", f"Terminated process to select new end")
+            else:
+                QMessageBox.information(self, "Success", f"Terminated process to move events")
+
+            self.get_tab().change_starting_point = False
+            self.get_tab().change_end_point = False
+            self.get_tab().change_events = False
+            self.setFocusPolicy(Qt.NoFocus)
+            print('Selectie uitgeschakeld')
 
     def show_user_manual(self):
         from widget_manual import Manual
@@ -178,7 +229,6 @@ class MainWindow(QMainWindow):
         if READ_SAMPLE:
             self.connection_action.setEnabled(False)
         self.connection_action.setStatusTip("Connect and calibrate the sensor")
-        # self.connection_action.triggered.connect(lambda: self.show_progress_dialog("Connecting...", 100))
         self.connection_action.triggered.connect(lambda: self.connecting())
         toolbar.addAction(self.connection_action)
 
@@ -186,7 +236,6 @@ class MainWindow(QMainWindow):
         self.calibrate_action.setEnabled(False)
         self.calibrate_action.setStatusTip("Calibrate the sensor")
         self.calibrate_action.triggered.connect(lambda: self.calibration())
-        # self.calibrate_action.triggered.connect(lambda: self.show_progress_dialog("Calibrating...", 100))
         toolbar.addAction(self.calibrate_action)
 
         toolbar.addSeparator()
@@ -223,7 +272,6 @@ class MainWindow(QMainWindow):
         self.event_action.setStatusTip("Calculate the events for all trials")
         self.event_action.setEnabled(False)
         self.event_action.triggered.connect(self.process_events)
-        self.event_action.setEnabled(True)
         toolbar.addAction(self.event_action)
 
         toolbar.addSeparator()
@@ -244,9 +292,6 @@ class MainWindow(QMainWindow):
             self.status_widget.set_status("no sensor")
         else:
             self.status_widget.set_status("disconnected")
-
-    def calibrate_message(self):
-        self.statusBar().showMessage("Calibrating the sensors...", 5000)
 
     def collect_data(self):
         for filename in os.listdir(self.folder):
@@ -275,7 +320,7 @@ class MainWindow(QMainWindow):
         trial_data = pd.read_excel(file)
         trial_number = file.split('.')[-2].split('_')[-1]
 
-        tab = self.tab_widget.widget(int(trial_number)-1)
+        tab = self.tab_widget.widget(int(trial_number) - 1)
 
         xs = trial_data.iloc[:, 0].values
         if isinstance(tab, TrailTab) and len(xs) > 1:
@@ -333,7 +378,7 @@ class MainWindow(QMainWindow):
 
                             tab.score.setCurrentIndex(score)
 
-                    elif 'Trial' in rule_text and int(rule_text.split()[1][:-1]) == trial_number+1:
+                    elif 'Trial' in rule_text and int(rule_text.split()[1][:-1]) == trial_number + 1:
                         in_table = False
                         trial_number += 1
 
@@ -389,34 +434,40 @@ class MainWindow(QMainWindow):
 
         tab = self.get_tab()
 
-        if tab is None or (not self.is_connected and not READ_SAMPLE):
+        if tab is None or (not self.is_connected and self.first_calibration and not READ_SAMPLE):
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(False)
 
-        elif tab.trial_state == TrialState.not_started:
+        elif tab.trial_state == TrialState.not_started and (not self.first_calibration or READ_SAMPLE):
             self.start_action.setEnabled(True)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(False)
 
-            self.new_start_action.setEnabled(False)
         elif tab.trial_state == TrialState.running:
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(True)
             self.reset_action.setEnabled(False)
 
-            self.new_start_action.setEnabled(False)
         elif tab.trial_state == TrialState.completed:
             self.start_action.setEnabled(False)
             self.stop_action.setEnabled(False)
             self.reset_action.setEnabled(True)
 
-            self.new_start_action.setEnabled(True)
-
         if tab.trial_state == TrialState.completed:
             self.new_start_action.setEnabled(True)
+            self.new_end_action.setEnabled(True)
+            self.process_action.setEnabled(True)
+            self.event_action.setEnabled(True)
+            if tab.event_log[-1] != 0:
+                self.move_events_action.setEnabled(True)
         else:
             self.new_start_action.setEnabled(False)
+            self.new_end_action.setEnabled(False)
+            self.process_action.setEnabled(False)
+            self.event_action.setEnabled(False)
+            self.move_events_action.setEnabled(False)
+
 
     def start_current_reading(self):
         tab = self.get_tab()
@@ -467,7 +518,6 @@ class MainWindow(QMainWindow):
         connected = False
         self.dongle_id = None
 
-        # Add timeout to prevent infinite loop
         attempt = 0
 
         while self.dongle_id is None and attempt < MAX_ATTEMPTS:
@@ -490,15 +540,11 @@ class MainWindow(QMainWindow):
             return
 
         set_units(self.dongle_id)
-        self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
-
-        if not self.calibration_status:
-            QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
 
         self.is_connected = True
         self.connection_action.setEnabled(False)  # Disable connect button after successful connection
         self.calibrate_action.setEnabled(True)
-        self.disconnect_action.setEnabled(True)
+        self.disconnect_sensor_action.setEnabled(True)
         self.statusBar().showMessage("Successfully connected to sensors")
         QMessageBox.information(self, "Success", "Successfully connected to sensors!")
         self.status_widget.set_status("connected")
@@ -510,26 +556,47 @@ class MainWindow(QMainWindow):
         popup = ButtonTester(self)
         popup.show()
 
-    def disconnecting(self):
+    def disconnecting_sensors(self):
         self.is_connected = False
         close_sensor()
         self.connection_action.setEnabled(True)
         self.calibrate_action.setEnabled(False)
-        self.disconnect_action.setEnabled(False)
+        self.disconnect_sensor_action.setEnabled(False)
         self.button_trigger = None
         self.connection_button_action.setEnabled(True)
-        self.statusBar().showMessage("Successfully disconnected to sensors and button")
+        self.statusBar().showMessage("Successfully disconnected to sensors")
         self.status_widget.set_status("disconnected")
         self.update_toolbar()
 
+    def disconnecting_button(self):
+        self.button_trigger = None
+        self.connection_button_action.setEnabled(True)
+        self.disconnect_button_action.setEnabled(False)
+        self.statusBar().showMessage("Successfully disconnected to button")
+        self.update_toolbar()
+
     def calibration(self):
-        ret = QMessageBox.warning(self, "Warning",
-                                  "Do you really want to calibrate again?",
-                                  QMessageBox.Yes | QMessageBox.Cancel)
-        if ret == QMessageBox.Yes:
+        ret = QMessageBox.Cancel
+        if not self.first_calibration:
+            ret = QMessageBox.warning(self, "Warning",
+                                      "Do you really want to calibrate again?",
+                                      QMessageBox.Yes | QMessageBox.Cancel)
+
+        if self.first_calibration or ret == QMessageBox.Yes:
             QMessageBox.information(self, "Info", "Started to calibrate. "
                                                   "Please wait a bit and keep the sensors at a fixed position.")
-            self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
+            try:
+                self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
+            except:
+                self.calibration_status = False
+            # self.calibration_status = True
+
+            if not self.calibration_status:
+                QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
+            else:
+                self.first_calibration = False
+                self.update_toolbar()
+                QMessageBox.information(self, "Success", "Successfully callibrated to sensors!")
 
     def xt_plot(self):
         self.get_tab().xt_plot()
@@ -561,7 +628,9 @@ class MainWindow(QMainWindow):
                 tab = self.tab_widget.widget(index)
 
                 if isinstance(tab, TrailTab) and len(tab.xs) > 0:
-                    tab.process(self.b, self.a)
+                    if tab.first_process:
+                        tab.process(self.b, self.a)
+                        tab.first_process = False
                     tab.calculate_events((self.folder is not None), go)
 
             self.events_present = True
@@ -624,7 +693,7 @@ class MainWindow(QMainWindow):
 
         self.pdf.set_font("Arial", style="BU", size=16)
         self.pdf.cell(0, 10, f"Participant {self.id_part} by assessor {self.assessor} "
-                        f"on {self.date}" if self.id_part and self.assessor else
+                             f"on {self.date}" if self.id_part and self.assessor else
         f"Participant {self.id_part} on {self.date}" if self.id_part else
         f"Participant Unknown on {self.date}", ln=True)
         self.pdf.set_font("Arial", size=12)
@@ -641,6 +710,7 @@ class MainWindow(QMainWindow):
             name_layout = QHBoxLayout()
             name_label = QLabel("Participant code:")
             self.participant_code = QLineEdit()
+            self.participant_code.setText(self.id_part)
             name_layout.addWidget(name_label)
             name_layout.addWidget(self.participant_code)
             layout.addLayout(name_layout)
@@ -685,7 +755,7 @@ class MainWindow(QMainWindow):
             counter = 0
             while os.path.exists(self.participant_folder):
                 counter += 1
-                self.participant_folder = os.path.join(folder, self.participant_code.text()+f'({counter})')
+                self.participant_folder = os.path.join(folder, self.participant_code.text() + f'({counter})')
             os.makedirs(self.participant_folder, exist_ok=True)
             self.name_pdf = self.participant_code.text()
 
@@ -696,7 +766,8 @@ class MainWindow(QMainWindow):
             self.make_progress()
             self.thread = QThread()
             self.worker = ProgressionThread(self, self.pdf, self.participant_folder,
-                            [index for index in range(len(checkboxes)) if checkboxes[index].isChecked()])
+                                            [index for index in range(len(checkboxes)) if
+                                             checkboxes[index].isChecked()])
             self.worker.moveToThread(self.thread)
 
             self.worker.pdf_ready_image.connect(self.add_plots_data)
@@ -709,24 +780,52 @@ class MainWindow(QMainWindow):
 
             break
 
-    def add_plots_data(self, plot_index, xs, left_data, right_data):
-        print('check')
+    def add_plots_data(self, plot_index, case, xs, left_data, right_data, events):
         buf = io.BytesIO()
-        buf.seek(0)
 
-        plt.plot(xs, left_data, label='Left Sensor', color='green')
-        plt.plot(xs, right_data, label='Right Sensor', color='red')
+        fig, ax = plt.subplots()
 
-        plt.title(
+        ax.plot(xs, left_data, label='Left Sensor', color='green')
+        ax.plot(xs, right_data, label='Right Sensor', color='red')
+
+        legend_hands = ax.legend()
+        ax.add_artist(legend_hands)
+
+        if events[-1] != 0:
+            x_positions = [xs[ei] for ei in events]
+            if case in [0, 2, 5, 7]:
+                y_positions = [left_data[ei] for ei in events[:3]]
+                y_positions += [right_data[ei] for ei in events[3:]]
+            elif case in [1, 3, 4, 6]:
+                y_positions = [right_data[ei] for ei in events[:3]]
+                y_positions += [left_data[ei] for ei in events[3:]]
+            else:
+                return
+
+            for i in range(NUMBER_EVENTS):
+                ax.scatter(x_positions[i], y_positions[i], c=COLORS_EVENT[i], label=LABEL_EVENT[i], s=32,
+                            zorder=15 - i)
+
+        ax.set_title(
             f"{'X' if plot_index == 0 else 'Y' if plot_index == 1 else 'Z' if plot_index == 2 else 'Velocity'} Plot")
-        plt.xlabel("Time (s)")
+        ax.set_xlabel("Time (s)")
         ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (m/s)"][plot_index]
-        plt.ylabel(ylabel)
-        plt.legend()
-        plt.grid(True)
+        ax.set_ylabel(ylabel)
+
+        if events[-1] != 0:
+            legend_elements = [None] * NUMBER_EVENTS
+            for i in range(NUMBER_EVENTS):
+                legend_elements[i] = Line2D([0], [0], marker='o', color='w', markerfacecolor=COLORS_EVENT[i],
+                                            markersize=10, label=LABEL_EVENT[i])
+
+            # Place legend below the plot
+            ax.legend(handles=legend_elements, loc='upper center',
+                       bbox_to_anchor=(0.5, -0.12), ncol=6)
+
+        ax.grid(True)
 
         plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-        plt.close()
+        plt.close(fig)
 
         buf.seek(0)
 
@@ -764,7 +863,7 @@ class MainWindow(QMainWindow):
 
 class ProgressionThread(QThread):
     progress = Signal(int)
-    pdf_ready_image = Signal(int, list, list, list)
+    pdf_ready_image = Signal(int, int, list, list, list, list)
     finished_file = Signal()
     error_occurred = Signal(str)
 
@@ -780,10 +879,11 @@ class ProgressionThread(QThread):
         self.counter_progress = 0
 
         active_tabs = self.count_active_tabs()
+        if active_tabs == 0: active_tabs = 100
         if len(self.checkboxes) == 0:
             self.step_progress = 1 / active_tabs * 100
         else:
-            self.step_progress = 1/(active_tabs*len(self.checkboxes))*100
+            self.step_progress = 1 / (active_tabs * len(self.checkboxes)) * 100
 
         self.mutex = QMutex()
         self.condition = QWaitCondition()
@@ -865,94 +965,136 @@ class ProgressionThread(QThread):
                                   data["Right Sensor z (cm)"] if pos_index == 2 else
                                   data["Right Sensor v (m/s)"]][0]
 
-                    print('hello')
-
                     self.mutex.lock()
-                    self.pdf_ready_image.emit(pos_index, tab.xs, left_data, right_data)
+                    self.pdf_ready_image.emit(pos_index, tab.case_status, tab.xs, left_data, right_data, tab.event_log)
                     self.condition.wait(self.mutex)
                     self.mutex.unlock()
-
-                    print('hello')
 
                     self.counter_progress += self.step_progress
                     self.progress.emit(round(self.counter_progress))
 
-            if self.counter_progress < (index + 1)*self.step_progress:
+            if self.counter_progress < (index + 1) * self.step_progress:
                 self.counter_progress += self.step_progress
                 self.progress.emit(round(self.counter_progress))
 
-            print(tab.extra_info_events)
-            if tab.extra_info_events and tab.get_score() == 3:
+            if tab.extra_parameters_bim and tab.get_score() == 3:
                 self.pdf.set_font("Arial", style="B", size=12)
                 self.pdf.cell(0, 10, 'Table', ln=True)
 
-                col_widths = [60, 40]
+                col_widths = [45, 60, 40]
                 self.pdf.set_font('Arial', '', 12)
 
                 data = [
-                    ['Total time', str(round(tab.extra_info_events[0], 2))],
-                    ['Time box hand', str(round(tab.extra_info_events[1], 2))],
-                    ['Time 1e phase BH', str(round(tab.extra_info_events[2], 2))],
-                    ['Time 2e phase BH', str(round(tab.extra_info_events[3], 2))],
-                    ['Time trigger hand', str(round(tab.extra_info_events[4], 2))],
-                    ['Temporal coupling', str(round(tab.extra_info_events[5], 2))],
-                    ['Moment overlap', str(round(tab.extra_info_events[6], 2))],
-                    ['Goal synchronization', str(round(tab.extra_info_events[7], 2))],
+                    ['', 'Parameter', 'Value'],
+                    ['Bimanual', 'Total time', str(round(tab.extra_parameters_bim[0], 2))],
+                    ['', 'Temporal coupling', str(round(tab.extra_parameters_bim[1], 2))],
+                    ['', 'Movement overlap', str(round(tab.extra_parameters_bim[2], 2))],
+                    ['', 'Goal synchronization', str(round(tab.extra_parameters_bim[3], 2))],
+
+                    ['Unimanual', 'Time box hand', str(round(tab.extra_parameters_uni[0], 2))],
+                    ['', 'Time 1e phase BH', str(round(tab.extra_parameters_uni[1], 2))],
+                    ['', 'Time 2e phase BH', str(round(tab.extra_parameters_uni[2], 2))],
+                    ['', 'Time trigger hand', str(round(tab.extra_parameters_uni[3], 2))],
+                    ['', 'Smoothness BH', str(round(tab.extra_parameters_uni[4], 2))],
+                    ['', 'Smoothness TH', str(round(tab.extra_parameters_uni[5], 2))],
+                    ['', 'Path length BH', str(round(tab.extra_parameters_uni[6], 2))],
+                    ['', 'Path 1e phase BH', str(round(tab.extra_parameters_uni[7], 2))],
+                    ['', 'Path 2e phase BH', str(round(tab.extra_parameters_uni[8], 2))],
+                    ['', 'Path length TH', str(round(tab.extra_parameters_uni[9], 2))],
                 ]
 
-                for row in data:
+                line_height = 10
+                self.pdf.set_fill_color(235, 235, 235)  # lichtgrijs
+                self.pdf.set_text_color(0, 0, 0)
+
+                for row_ind, row in enumerate(data):
                     self.pdf.set_x(20)
-                    for i, datum in enumerate(row):
-                        self.pdf.cell(col_widths[i], 10, datum, border=1)
-                    self.pdf.ln(10)
+                    first_row = (row_ind == 0)
+
+                    for col_ind, datum in enumerate(row):
+                        fill = first_row or col_ind == 0
+                        align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
+                        style = 'B' if first_row or col_ind == 0 else ''
+                        self.pdf.set_font("Arial", style, size=12)
+                        self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
+
+                    self.pdf.ln(line_height)
 
     def average_events_info(self):
         from widget_trials import TrailTab
 
-        average_extra_left = [0] * 8
+        average_bim_left = [0] * 4
+        average_uni_left = [0] * 10
         left_counter = 0
-        average_extra_right = [0] * 8
+        average_bim_right = [0] * 4
+        average_uni_right = [0] * 10
         right_counter = 0
 
         for i in range(self.main.tab_widget.count()):
             tab = self.main.tab_widget.widget(i)
 
-            if isinstance(tab, TrailTab) and len(tab.extra_info_events) > 0:
-                if tab.case_status == 0 and average_extra_left[0] == 0:
-                    average_extra_left = tab.extra_info_events
+            if isinstance(tab, TrailTab) and len(tab.extra_parameters_bim) > 0:
+                if tab.case_status == 0 and average_bim_left[0] == 0:
+                    average_bim_left = tab.extra_parameters_bim
+                    average_uni_left = tab.extra_parameters_uni
                     left_counter = 1
-                elif tab.case_status == 1 and average_extra_right[0] == 0:
-                    average_extra_right = tab.extra_info_events
+                elif tab.case_status == 1 and average_bim_right[0] == 0:
+                    average_bim_right = tab.extra_parameters_bim
+                    average_uni_right = tab.extra_parameters_uni
                     right_counter = 1
                 elif tab.case_status == 0:
-                    average_extra_left = tuple(
-                        [a + b for a, b in zip(average_extra_left, tab.extra_info_events)])
+                    average_bim_left = tuple(
+                        [a + b for a, b in zip(average_bim_left, tab.extra_parameters_bim)])
+                    average_uni_left = tuple(
+                        [a + b for a, b in zip(average_uni_left, tab.extra_parameters_uni)])
                     left_counter += 1
                 elif tab.case_status == 1:
-                    average_extra_right = tuple(
-                        [a + b for a, b in zip(average_extra_right, tab.extra_info_events)])
+                    average_bim_right = tuple(
+                        [a + b for a, b in zip(average_bim_right, tab.extra_parameters_bim)])
+                    average_uni_right = tuple(
+                        [a + b for a, b in zip(average_uni_right, tab.extra_parameters_uni)])
                     right_counter += 1
 
-        average_extra_left = tuple([temp / left_counter if left_counter != 0 else 0 for temp in average_extra_left])
-        average_extra_right = tuple([temp / right_counter if right_counter != 0 else 0 for temp in average_extra_right])
+        average_bim_left = tuple([temp / left_counter if left_counter != 0 else 0 for temp in average_bim_left])
+        average_uni_left = tuple([temp / left_counter if left_counter != 0 else 0 for temp in average_uni_left])
+        average_bim_right = tuple([temp / right_counter if right_counter != 0 else 0 for temp in average_bim_right])
+        average_uni_right = tuple([temp / right_counter if right_counter != 0 else 0 for temp in average_uni_right])
 
-        col_widths = [60, 40, 40]
+        col_widths = [45, 60, 40, 40]
         self.pdf.set_font('Arial', '', 12)
 
         data = [
-            ['', 'Left', 'Right'],
-            ['Total time', str(round(average_extra_left[0], 2)), str(round(average_extra_right[0], 2))],
-            ['Time box hand', str(round(average_extra_left[1], 2)), str(round(average_extra_right[1], 2))],
-            ['Time 1e phase BH', str(round(average_extra_left[2], 2)), str(round(average_extra_right[2], 2))],
-            ['Time 2e phase BH', str(round(average_extra_left[3], 2)), str(round(average_extra_right[3], 2))],
-            ['Time trigger hand', str(round(average_extra_left[4], 2)), str(round(average_extra_right[4], 2))],
-            ['Temporal coupling', str(round(average_extra_left[5], 2)), str(round(average_extra_right[5], 2))],
-            ['Moment overlap', str(round(average_extra_left[6], 2)), str(round(average_extra_right[6], 2))],
-            ['Goal synchronization', str(round(average_extra_left[7], 2)), str(round(average_extra_right[7], 2))],
+            ['', 'Parameter', 'Average left', 'Average right'],
+            ['Bimanual', 'Total time', str(round(average_bim_left[0], 2)), str(round(average_bim_right[0], 2))],
+            ['', 'Temporal coupling', str(round(average_bim_left[1], 2)), str(round(average_bim_right[1], 2))],
+            ['', 'Movement overlap', str(round(average_bim_left[2], 2)), str(round(average_bim_right[2], 2))],
+            ['', 'Goal synchronization', str(round(average_bim_left[3], 2)), str(round(average_bim_right[3], 2))],
+
+            ['Unimanual', 'Time box hand', str(round(average_uni_left[0], 2)), str(round(average_uni_right[0], 2))],
+            ['', 'Time 1e phase BH', str(round(average_uni_left[1], 2)), str(round(average_uni_right[1], 2))],
+            ['', 'Time 2e phase BH', str(round(average_uni_left[2], 2)), str(round(average_uni_right[2], 2))],
+            ['', 'Time trigger hand', str(round(average_uni_left[3], 2)), str(round(average_uni_right[3], 2))],
+            ['', 'Smoothness BH', str(round(average_uni_left[4], 2)), str(round(average_uni_right[4], 2))],
+            ['', 'Smoothness TH', str(round(average_uni_left[5], 2)), str(round(average_uni_right[5], 2))],
+            ['', 'Path length BH', str(round(average_uni_left[6], 2)), str(round(average_uni_right[6], 2))],
+            ['', 'Path 1e phase BH', str(round(average_uni_left[7], 2)), str(round(average_uni_right[7], 2))],
+            ['', 'Path 2e phase BH', str(round(average_uni_left[8], 2)), str(round(average_uni_right[8], 2))],
+            ['', 'Path length TH', str(round(average_uni_left[9], 2)), str(round(average_uni_right[9], 2))],
         ]
 
-        for row in data:
-            self.pdf.set_x(20)
-            for i, datum in enumerate(row):
-                self.pdf.cell(col_widths[i], 10, datum, border=1)
-            self.pdf.ln(10)
+        line_height = 10
+        self.pdf.set_fill_color(235, 235, 235)
+        self.pdf.set_text_color(0, 0, 0)
+
+        for row_ind, row in enumerate(data):
+            self.pdf.set_x(15)
+            first_row = (row_ind == 0)
+
+            for col_ind, datum in enumerate(row):
+                fill = first_row or col_ind == 0
+                align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
+                style = 'B' if first_row or col_ind == 0 else ''
+                self.pdf.set_font("Arial", style, size=12)
+                self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
+
+            self.pdf.ln(line_height)
