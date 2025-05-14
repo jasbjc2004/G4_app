@@ -2,9 +2,13 @@ import numpy as np
 from scipy.signal import argrelextrema
 
 from constants import MAX_HEIGHT_NEEDED, POSITION_BUTTON, MAX_LENGTH_NEEDED, MIN_HEIGHT_NEEDED, MIN_LENGTH_NEEDED, \
-    THRESHOLD_BOTH_HANDS, SPEED_THRESHOLD, HEIGHT_BOX, THRESHOLD_CHANGED_HANDS_MEAS, fs
+    THRESHOLD_BOTH_HANDS, SPEED_THRESHOLD, HEIGHT_BOX, THRESHOLD_CHANGED_HANDS_MEAS, fs, NUMBER_EVENTS
 from sensor_G4Track import *
 import time
+
+"""
+All functions needed for the data processing and calibration
+"""
 
 
 def calibration_to_center(sys_id):
@@ -76,9 +80,9 @@ def calibration_to_center(sys_id):
 
 def calculate_boxhand(pos_left, pos_right):
     """
-
-    :param pos_left:
-    :param pos_right:
+    Calculate the case of the movement
+    :param pos_left: list of coordinates of the left hand
+    :param pos_right: list of coordinates of the right hand
     :returns:
         0 if the left hand is the box hand,
         1 if the right hand is the box hand
@@ -150,10 +154,22 @@ def calculate_boxhand(pos_left, pos_right):
 
 
 def calculate_events(pos_left, pos_right, case, score):
-    if (case == 0 and score == 3) or ((case == 2 or case == 6) and score == 2) or (case == 5 and score == 1):
+    """
+    Calculate the events (5 in total + 1 at the end calculate_e6)
+    :param pos_left: list of coordinates of the left hand
+    :param pos_right: list of coordinates of the right hand
+    :param case: case as estimated in calculate_boxhand
+    :param score: score of the movement (currently not used)
+    :return: list of the events
+    """
+    if case == 0 or case == 2 or case == 7:
         trigger_hand, box_hand = pos_right, pos_left
-    elif (case == 1 and score == 3) or ((case == 3 or case == 7) and score == 2) or (case == 4 and score == 1):
+    elif case == 1 or case == 3 or case == 6:
         trigger_hand, box_hand = pos_left, pos_right
+    elif case == 4:
+        trigger_hand, box_hand = pos_right, pos_right
+    elif case == 5:
+        trigger_hand, box_hand = pos_left, pos_left
     else:
         return 0, 0, 0, 0, 0
 
@@ -171,8 +187,8 @@ def calculate_events(pos_left, pos_right, case, score):
             e1 -= 1
         print("e1", e1)
 
-        if score != 3:
-            return e1, 0, 0, 0, 0
+        # if score != 3:
+        #     return e1, 0, 0, 0, 0
 
         # calculating e2
         piek_1 = np.argmax(v_bh[e1:e1 + 51]) + e1 - 1
@@ -191,16 +207,21 @@ def calculate_events(pos_left, pos_right, case, score):
         start_trigger = pos_left[0]
 
         e4 = 0
-        for i in range(len(pos_left)):
+        i = -1
+        higher_value = False
+        while not higher_value:
+            i += 1
             if trigger_hand[i][2] < MAX_HEIGHT_NEEDED + start_trigger[2] and \
                     trigger_hand[i][1] < MAX_LENGTH_NEEDED + start_trigger[1]:
                 e4 = i
+            else:
+                higher_value = True
 
-        while e4 > 1 and v_th[e4-1] >= SPEED_THRESHOLD:
+        while e4 > 1 and v_th[e4 - 1] >= SPEED_THRESHOLD:
             e4 -= 1
 
         e5 = len(pos_left) - 1
-        while e5 > 1 and v_th[e5-1] >= SPEED_THRESHOLD:
+        while e5 > 1 and v_th[e5 - 1] >= SPEED_THRESHOLD:
             e5 -= 1
 
         if abs(e5 - e1) < 60:
@@ -208,14 +229,44 @@ def calculate_events(pos_left, pos_right, case, score):
 
         return e1, e2, e3, e4, e5
     except:
-        return 0,0,0,0,0
+        return 0, 0, 0, 0, 0
+
+
+def calculate_position_events(case_status):
+    """
+    Function to return the original position of the events
+    :param case_status: case as a result of calculate_boxhand
+    :return: the position of the events
+    """
+    if case_status in [0, 2, 6]:
+        return ['Left'] * 3 + ['Right'] * 3
+    elif case_status in [1, 3, 7]:
+        return ['Right'] * 3 + ['Left'] * 3
+    elif case_status == 4:
+        return ['Right'] * NUMBER_EVENTS
+    elif case_status == 5:
+        return ['Left'] * NUMBER_EVENTS
+    else:
+        return ['Right'] * NUMBER_EVENTS
 
 
 def calculate_e6(xs):
+    """
+    Calculate the last event
+    :param xs: the timestamps
+    :return: e6
+    """
     return len(xs) - 1
 
 
 def calculate_extra_parameters(events, trigger_hand, box_hand):
+    """
+    Get all the parameters (both unimanual as bimanual)
+    :param events: all the events calculated in calculate_events and calculate_e6
+    :param trigger_hand: coordinates of the trigger hand
+    :param box_hand: coordinates of the box hand
+    :return: 4 bimanual and 10 unimanual parameters
+    """
     e1, e2, e3, e4, e5, e6 = events
     bx = np.array([pos[0] for pos in box_hand])
     by = np.array([pos[1] for pos in box_hand])
