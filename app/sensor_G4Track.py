@@ -2,6 +2,10 @@ import ctypes as ct
 import os
 from enum import Enum
 
+"""
+Files for the libraries of Polhemus function from the .dll (converted from C)
+"""
+
 file_directory = os.path.dirname(os.path.abspath(__file__))
 G4Track = ct.CDLL(os.path.join(file_directory, "NEEDED/FILES/G4Track.dll"))
 G4_sensors_per_hub = 3
