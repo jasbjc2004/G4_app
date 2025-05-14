@@ -5,7 +5,10 @@ import shutil
 import glob
 import winreg
 
-
+"""
+code to load all the important files and make an .exe from the main-file to a working project
+.exe can be found in the dist-directory
+"""
 def build_executable(
         main_script=None,
         name='app',
@@ -14,7 +17,7 @@ def build_executable(
         python_files=None,
 ):
     """
-    Build a PyInstaller executable with robust file handling.
+    Build a PyInstaller executable with robust file handling. (code from ChatGPT)
     """
     # Prepare PyInstaller command
     command = [
@@ -124,7 +127,7 @@ def main():
     # Build the executable
     build_executable(
         main_script=main_script,
-        name='final_test_software',  # You can change this
+        name='final_test_software',
         icon=icon,
         additional_files=extra_files,
         python_files=None
@@ -132,7 +135,6 @@ def main():
 
 
 if __name__ == '__main__':
-    # Add this import here to avoid potential circular import issues
     import glob
 
     main()
