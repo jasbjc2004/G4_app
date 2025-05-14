@@ -1,5 +1,6 @@
 import os
 
+from PySide6.QtGui import QIcon
 from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
@@ -9,9 +10,15 @@ from PySide6.QtCore import Qt
 
 
 class Manual(QDialog):
+    """
+    creates a window to check the use manual inside the program
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Manual")
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')
+        self.setWindowIcon(QIcon(dir_icon))
         self.setGeometry(200, 100, 800, 700)
 
         self.setWindowFlags(Qt.Window)
