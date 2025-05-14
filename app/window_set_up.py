@@ -2,6 +2,7 @@ import os
 import threading
 
 import pygame
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QVBoxLayout, QPushButton, QLineEdit, QLabel, QHBoxLayout,
     QDateEdit, QTextEdit, QMessageBox, QComboBox, QDialog, QCheckBox,
@@ -14,8 +15,16 @@ import pikepdf
 
 
 class SetUp(QDialog):
+    """
+    Window to add all the important data and load all the music in advance when user is filling in data
+    """
     def __init__(self, folder=None):
         super().__init__()
+
+        self.setWindowTitle("Setup")
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')
+        self.setWindowIcon(QIcon(dir_icon))
 
         main_layout = QVBoxLayout()
 
@@ -64,9 +73,11 @@ class SetUp(QDialog):
         assessor_layout.addWidget(self.assessor_input)
 
         self.negative_z = QCheckBox(text="Negative z in the data")
+        self.manual_events = QCheckBox(text="Use manual events")
         self.folder = folder
         if folder:
             notes_layout.addWidget(self.negative_z)
+            notes_layout.addWidget(self.manual_events)
             self.load_pdf()
 
         # Add widgets to the form layout
@@ -84,8 +95,8 @@ class SetUp(QDialog):
         self.back_button = QPushButton("Back")
         self.back_button.clicked.connect(self.back_button_pressed)
         button_layout.addStretch()
-        button_layout.addWidget(self.back_button)
         button_layout.addWidget(self.save_button)
+        button_layout.addWidget(self.back_button)
 
         # Add form and button layouts to main layout
         main_layout.addLayout(form_layout)
@@ -109,7 +120,6 @@ class SetUp(QDialog):
         for t in threads_sound:
             t.join()
 
-
     def save_button_pressed(self):
         if self.name_input.text().strip() == "":
             ret = QMessageBox.warning(self, "Warning",
@@ -119,14 +129,14 @@ class SetUp(QDialog):
                 num_trials = self.combo_box.currentData()
                 self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
                                              self.date_input.text(), num_trials, self.notes_input.toPlainText().strip(),
-                                             self.sound, self.folder, self.negative_z.isChecked())
+                                             self.sound, self.folder, self.negative_z.isChecked(), self.manual_events.isChecked())
                 self.mainwindow.show()
                 self.close()
         else:
             num_trials = self.combo_box.currentData()
             self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
                                          self.date_input.text(), num_trials, self.notes_input.toPlainText().strip(),
-                                         self.sound, self.folder, self.negative_z.isChecked())
+                                         self.sound, self.folder, self.negative_z.isChecked(), self.manual_events.isChecked())
             self.mainwindow.show()
             self.close()
 
@@ -144,6 +154,9 @@ class SetUp(QDialog):
         self.sound.append(pygame.mixer.Sound(dir_sound))
 
     def load_pdf(self):
+        """
+        Load the information from the PDF and fill the corresponding boxes in the window (add_data)
+        """
         for filename in os.listdir(self.folder):
             file_path = os.path.join(self.folder, filename)
 
@@ -154,6 +167,9 @@ class SetUp(QDialog):
                 self.add_data(file_path)
 
     def add_data(self, file):
+        """
+        Adds the data from the file to the boxes
+        """
         pdf = pikepdf.Pdf.open(file)
 
         intro = pdf.pages[0]
@@ -195,5 +211,5 @@ class SetUp(QDialog):
                     set_values[3] = 1
 
                 else:
-                    if rule_text != 'No Notes':
+                    if rule_text != 'No Additional Notes':
                         self.notes_input.append(rule_text)
