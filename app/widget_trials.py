@@ -20,7 +20,8 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
-from data_processing import calculate_boxhand, calculate_e6, calculate_events, calculate_extra_parameters
+from data_processing import calculate_boxhand, calculate_e6, calculate_events, calculate_extra_parameters, \
+    calculate_position_events
 from sensor_G4Track import get_frame_data
 
 from scipy import signal
@@ -31,16 +32,22 @@ from constants import READ_SAMPLE, BEAUTY_SPEED, SERIAL_BUTTON, MAX_HEIGHT_NEEDE
 
 
 class TrialState(Enum):
+    """
+    All the possibles states the trial can be in
+    """
     not_started = 0
     running = 1
     completed = 2
 
 
 class TrailTab(QWidget):
+    """
+    Needed to show the plot and all the information related to a trial
+    """
     def __init__(self, trail_number, parent: MainWindow):
         super().__init__(parent)
         self.case_status = -1
-        self.scatter = None
+        self.scatter = []
         self.trial_number = trail_number
         self.reading_active = False
         self.trial_state = TrialState.not_started
@@ -54,6 +61,8 @@ class TrailTab(QWidget):
         self.change_end_point = False
         self.change_events = False
 
+        self.original_data_file = False
+
         self.pos_left = [0, 0, 0]
         self.pos_right = [0, 0, 0]
         self.xs = []
@@ -65,6 +74,7 @@ class TrailTab(QWidget):
         self.first_process = True
 
         self.event_log = [0] * NUMBER_EVENTS
+        self.event_old_log = [0] * NUMBER_EVENTS
         self.event_position = [None] * NUMBER_EVENTS
         self.extra_parameters_bim = []
         self.extra_parameters_uni = []
@@ -169,6 +179,10 @@ class TrailTab(QWidget):
         self.figure.tight_layout()
 
     def pick_a_point(self, event):
+        """
+        Take the coordinates of the selected point or move the scatter-events if selected
+        :param event: not the same as the events from the scatter, python-event
+        """
         if self.change_events and isinstance(event.artist, matplotlib.collections.PathCollection):
             for i, point in enumerate(self.scatter):
                 if event.artist == point:
@@ -203,6 +217,10 @@ class TrailTab(QWidget):
             self.window().statusBar().showMessage(f"Coordinates: x = {round(x, 2)} & y = {round(y, 2)}", 2000)
 
     def track_mouse(self, event):
+        """
+        Needed for the markings on the data of the plot
+        :param event: not the same as the events from the scatter, python-event
+        """
         if event.inaxes != self.ax:
             self.mouse_marker.set_visible(False)
             self.canvas.draw_idle()
@@ -242,6 +260,10 @@ class TrailTab(QWidget):
         self.canvas.draw_idle()
 
     def releasing_event(self, event):
+        """
+        Change the scatter-events from position when released
+        :param event: not the same as the events from the scatter, python-event
+        """
         if not self.change_events or self.move_event is None:
             return
 
@@ -249,11 +271,18 @@ class TrailTab(QWidget):
         index_search = round(x * fs)
 
         if 0 < index_search < len(self.plot_left_data):
+            if self.event_old_log[self.moving_event_index] == 0:
+                self.event_old_log[self.moving_event_index] = self.event_log[self.moving_event_index]
             self.event_log[self.moving_event_index] = index_search
-            if y == self.plot_left_data[index_search]:
+            if abs(y - self.plot_left_data[index_search]) < abs(y - self.plot_right_data[index_search]):
                 self.event_position[self.moving_event_index] = 'Left'
             else:
                 self.event_position[self.moving_event_index] = 'Right'
+
+            self.notes_input.setTextColor(QColor(Qt.red))
+            self.notes_input.append('')
+            self.notes_input.append(f'--> Alternated e{self.moving_event_index+1}: {index_search}, to a time: {round(x, 2)}')
+            self.notes_input.setTextColor(QColor(Qt.black))
 
             self.move_event = None
             self.moving_event_index = None
@@ -284,10 +313,14 @@ class TrailTab(QWidget):
             except:
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
                 self.event_log = [0] * NUMBER_EVENTS
+                self.event_old_log = [0] * NUMBER_EVENTS
                 self.event_position = [None] * NUMBER_EVENTS
 
                 print(type(self.scatter))
-                if self.scatter: self.scatter.remove()
+                if self.scatter:
+                    for point in self.scatter:
+                        point.remove()
+                    self.scatter = []
 
         self.update_plot(True)
         self.window().setEnabled(True)
@@ -318,10 +351,14 @@ class TrailTab(QWidget):
             except:
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
                 self.event_log = [0] * NUMBER_EVENTS
+                self.event_old_log = [0] * NUMBER_EVENTS
                 self.event_position = [None] * NUMBER_EVENTS
 
                 print(type(self.scatter))
-                if self.scatter: self.scatter.remove()
+                if self.scatter:
+                    for point in self.scatter:
+                        point.remove()
+                    self.scatter = []
 
         self.update_plot(True)
         self.window().setEnabled(True)
@@ -369,10 +406,19 @@ class TrailTab(QWidget):
             self.line2.set_data([], [])
 
             self.event_log = [0] * NUMBER_EVENTS
+            self.event_old_log = [0] * NUMBER_EVENTS
             self.event_position = [None] * NUMBER_EVENTS
-            self.button_pressed = False
 
-            if self.scatter: self.scatter.remove()
+            self.button_pressed = False
+            self.first_event_guess = True
+            self.original_data_file = False
+
+            self.score.setCurrentIndex(0)
+
+            if self.scatter:
+                for point in self.scatter:
+                    point.remove()
+                self.scatter = []
 
             self.canvas.draw()
 
@@ -434,6 +480,9 @@ class TrailTab(QWidget):
         self.update_plot(True)
 
     def process(self, b, a):
+        """
+        Implement the Butterworth filter on the speed
+        """
         if SPEED_FILTER:
             output_left_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_left])
             output_right_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_right])
@@ -530,13 +579,13 @@ class TrailTab(QWidget):
 
                     self.ax.set_ylim(min_y, max_y)
 
-                if self.event_log[-1] != 0:
+                if self.scatter is not None:
                     print(type(self.scatter))
                     if self.scatter:
                         for i in range(len(self.scatter)):
                             self.scatter[i].remove()
                         self.scatter = []
-                    self.draw_events()
+                    if len(self.xs) > 0: self.draw_events()
 
                 self.canvas.draw()
 
@@ -546,9 +595,6 @@ class TrailTab(QWidget):
                     main_window.switch_to_next_tab()
                     self.play_music()
 
-            if self.reading_active and self.trial_state == TrialState.running and len(self.xs) > 0 and self.xs[-1] > 30:
-                self.stop_reading()
-
     def calculate_events(self, got_folder=False, go=False):
         if go or (self.event_log[-1] == 0 and (self.button_pressed or READ_SAMPLE or got_folder)):
             if go: self.remove_added_text()
@@ -556,28 +602,37 @@ class TrailTab(QWidget):
             self.event_log[-1] = calculate_e6(self.xs)
 
             self.case_status = calculate_boxhand(self.log_left, self.log_right)
+            print('done case')
             if self.first_event_guess:
-                self.score.setCurrentIndex(self.get_estimated_score())
+                if self.button_pressed or self.original_data_file and not \
+                        (self.original_data_file and self.get_score() == 0):
+                    self.score.setCurrentIndex(self.get_estimated_score())
+                    print('done')
+
                 self.first_event_guess = False
+
+            if self.get_score() == 0:
+                self.event_log = [0]*NUMBER_EVENTS
+                self.score.setCurrentIndex(0)
+
+            self.notes_input.append(" ")
 
             self.notes_input.setTextColor(QColor(Qt.red))
             notes = ('Left hand is boxhand', 'Right hand is boxhand', 'Both hands as boxhand',
                      'Both hands as boxhand', 'Left hand is not used', 'Right hand is not used',
                      'Hands switched, but right pressed', 'Hands switched, but left pressed', )
-            self.notes_input.append(notes[self.case_status])
+            self.notes_input.append(notes[self.case_status] if self.button_pressed or (self.original_data_file and self.get_score() != 0) else 'Button not pressed')
 
-            self.notes_input.append( f"Estimated score: {self.get_estimated_score()}" )
+            self.notes_input.append( f"Estimated score: {self.get_estimated_score() if self.button_pressed or (self.original_data_file and self.get_score() != 0) else 0}" )
 
-            e1, e2, e3, e4, e5 = calculate_events(self.log_left, self.log_right, self.case_status, self.get_score())
-            self.event_log[0], self.event_log[1], self.event_log[2], self.event_log[3], self.event_log[4] = \
-                e1, e2, e3, e4, e5
+            if self.get_score() != 0:
+                e1, e2, e3, e4, e5 = calculate_events(self.log_left, self.log_right, self.case_status, self.get_score())
+                self.event_log[0], self.event_log[1], self.event_log[2], self.event_log[3], self.event_log[4] = \
+                    e1, e2, e3, e4, e5
 
-            if self.case_status in [0, 2, 5, 7]:
-                self.event_position = ['Left']*3+['Right']*3
-            elif self.case_status in [1, 3, 4, 6]:
-                self.event_position = ['Right']*3+['Left']*3
-            else:
-                return
+            self.event_position = calculate_position_events(self.case_status)
+
+            print(self.event_position)
 
             if self.get_score() == 3:
                 if self.case_status == 0:
@@ -591,20 +646,35 @@ class TrailTab(QWidget):
             else:
                 self.extra_parameters_bim, self.extra_parameters_uni = [], []
 
-            self.notes_input.append(f'The measured data is e1: {e1} and e2: {e2}')
-            self.notes_input.append(f'The time is then for e1: {round(self.xs[e1],2)} and e2: {round(self.xs[e2], 2)}')
-            self.notes_input.append(f'The measured data is e3: {e3}')
-            self.notes_input.append(f'The time is then for e3: {round(self.xs[e3], 2)}')
-            self.notes_input.append('')
-            self.notes_input.append(f'The measured data is e4: {e4} and e5: {e5}')
-            self.notes_input.append(f'The time is then for e4: {round(self.xs[e4],2)} and e5: {round(self.xs[e5],2)}')
+            if self.get_score() != 0:
+                text = self.text_events(self.event_log)
+                for line in text:
+                    self.notes_input.append(line)
 
             self.notes_input.setTextColor(QColor(Qt.black))
 
             self.update_plot(True)
             self.window().update_toolbar()
 
+    def text_events(self, events):
+        if len(events) < 6:
+            return
+
+        e1, e2, e3, e4, e5, e6 = events
+
+        text_events_notes = []
+        text_events_notes.append(f'The measured data is e1: {e1} and e2: {e2}')
+        text_events_notes.append(f'The time is then for e1: {round(self.xs[e1], 2)} and e2: {round(self.xs[e2], 2)}')
+        text_events_notes.append(f'The measured data is e3: {e3}')
+        text_events_notes.append(f'The time is then for e3: {round(self.xs[e3], 2)}')
+        text_events_notes.append('')
+        text_events_notes.append(f'The measured data is e4: {e4} and e5: {e5}')
+        text_events_notes.append(f'The time is then for e4: {round(self.xs[e4], 2)} and e5: {round(self.xs[e5], 2)}')
+        return text_events_notes
+
     def draw_events(self):
+        print(self.event_log)
+
         x_positions = [self.xs[ei] for ei in self.event_log]
 
         y_positions = [self.plot_left_data[ei] if self.event_position[index] == 'Left' else
@@ -660,6 +730,9 @@ class TrailTab(QWidget):
 
 
 class ReadThread(QThread):
+    """
+    Thread to read the data when plotting the data --> possible to get 120 Hz without letting the program wait
+    """
     def __init__(self, parent):
         super().__init__(parent)
 
@@ -684,6 +757,9 @@ class ReadThread(QThread):
         self.start_time = None
 
     def read_sensor_data(self):
+        """
+        Read the sensor data (and also some test cases) & adds it to the log
+        """
         tab = self.parent()
         if tab and isinstance(tab, TrailTab):
             elapsed_time = time.time() - self.start_time
