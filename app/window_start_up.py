@@ -1,5 +1,6 @@
 import os
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QVBoxLayout, QWidget, QPushButton, QFileDialog, QMessageBox
 )
@@ -8,9 +9,15 @@ from window_set_up import SetUp
 
 
 class StartUp(QWidget):
+    """
+    Window at the beginning of the program, to load existing project or start a new one
+    """
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Startup")
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')
+        self.setWindowIcon(QIcon(dir_icon))
 
         layout = QVBoxLayout()
 
@@ -36,32 +43,3 @@ class StartUp(QWidget):
             self.setup = SetUp(folder)
             self.setup.show()
             self.close()
-
-
-        """import tkinter as tk
-from tkinter import filedialog, Tk
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.signal import butter, filtfilt
-
-# Function to select file
-def select_file():
-    root = tk.Tk()
-    root.withdraw()  # Hide the main window
-    file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
-    return file_path
-
-# Select file
-file_path = select_file()
-
-if file_path:
-    # Load Excel data
-    df = pd.read_excel(file_path)
-
-    # Extract time and x data 
-    t = df.iloc[:, 0].values
-    f = df.iloc[:, 1].values 
-   
-else:
-    print("No file selected.")"""
