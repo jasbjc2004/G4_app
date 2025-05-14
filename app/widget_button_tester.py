@@ -1,5 +1,8 @@
+import os
+
 import serial
 import serial.tools.list_ports
+from PySide6.QtGui import QIcon
 
 from PySide6.QtWidgets import (
     QVBoxLayout, QLabel, QDialog, QPushButton, QSizePolicy
@@ -8,9 +11,15 @@ from PySide6.QtCore import Qt, QTimer
 
 
 class ButtonTester(QDialog):
+    """
+    Check the connection with the button
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Button tester")
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')
+        self.setWindowIcon(QIcon(dir_icon))
         self.setGeometry(200, 200, 400, 400)
 
         self.main_window = parent
@@ -51,6 +60,10 @@ class ButtonTester(QDialog):
         self.setLayout(layout)
 
     def connect_button(self):
+        """
+        Go through all ports and check for the right serial input
+        :return: the connection of the serial input
+        """
         from window_main_plot import MainWindow
 
         available_ports = serial.tools.list_ports.comports()
@@ -85,6 +98,9 @@ class ButtonTester(QDialog):
                     print(f"Failed to connect to {port}: {e}")
 
     def read_button(self):
+        """
+        check if the connection was successful and change the color of the button accordingly
+        """
         if self.button_connect is not None:
             try:
                 while self.button_connect.in_waiting > 0:
