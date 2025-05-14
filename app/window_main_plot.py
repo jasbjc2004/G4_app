@@ -1,6 +1,5 @@
 import io
 import os
-import time
 
 import pandas as pd
 import pikepdf
@@ -10,18 +9,19 @@ import threading
 import fpdf
 
 from PySide6.QtWidgets import (
-    QApplication, QVBoxLayout, QMainWindow, QWidget,
+    QVBoxLayout, QMainWindow, QWidget,
     QLineEdit, QLabel, QHBoxLayout, QMessageBox,
     QToolBar, QStatusBar, QTabWidget,
     QFileDialog, QDialog, QCheckBox, QDialogButtonBox,
 )
-from PySide6.QtGui import QAction
-from PySide6.QtCore import QSize, QObject, Signal, QThread, QEventLoop, QMutex, QWaitCondition, Qt
+from PySide6.QtGui import QAction, QIcon
+from PySide6.QtCore import QSize, Signal, QThread, QMutex, QWaitCondition, Qt
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
 
 from sensor_G4Track import initialize_system, set_units, get_active_hubs, close_sensor
-from data_processing import calibration_to_center
+from data_processing import calibration_to_center, calculate_boxhand, calculate_position_events, \
+    calculate_extra_parameters
 
 from scipy import signal
 
@@ -30,12 +30,15 @@ from constants import MAX_ATTEMPTS, READ_SAMPLE, SERIAL_BUTTON, fs, fc, ORDER_FI
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False):
+    def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False):
         super().__init__()
 
         self.button_trigger = None
 
-        self.setWindowTitle("Sensors")
+        self.setWindowTitle(id)
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')
+        self.setWindowIcon(QIcon(dir_icon))
 
         self.first_time = True
         self.is_connected = False
@@ -55,6 +58,7 @@ class MainWindow(QMainWindow):
 
         self.folder = folder
         self.neg_z = neg_z
+        self.manual_events = manual
 
         self.setup(num_trials)
         self.id_part = id
@@ -105,6 +109,9 @@ class MainWindow(QMainWindow):
         self.update_toolbar()
 
     def tab_change_handler(self, index):
+        """
+        Not sure what this does anymore (only 1 rule)
+        """
         self.update_toolbar()
 
     def setup_menubar(self):
@@ -143,6 +150,9 @@ class MainWindow(QMainWindow):
         negz_action = settings_menu.addAction("Set the negative value of the z-axis")
         negz_action.triggered.connect(self.set_negz)
 
+        switch_hand_action = settings_menu.addAction("Switch the hand placement")
+        switch_hand_action.triggered.connect(self.switch_hands)
+
         self.new_start_action = settings_menu.addAction("New starting point")
         self.new_start_action.setEnabled(False)
         self.new_start_action.triggered.connect(lambda: self.new_startpoint())
@@ -178,6 +188,9 @@ class MainWindow(QMainWindow):
         menu_bar.setNativeMenuBar(False)
 
     def create_help(self):
+        """
+        Create the help pop-up
+        """
         from widget_help import Help
 
         popup = Help(self)
@@ -194,12 +207,17 @@ class MainWindow(QMainWindow):
         self.get_tab().change_end_point = True
 
     def move_events(self):
-        QMessageBox.information(self, "Information", f"You can move the events freely now on the graph ([ESC] to cancel)")
+        QMessageBox.information(self, "Information",
+                                f"You can move the events freely now on the graph ([ESC] to cancel)")
         self.setFocusPolicy(Qt.StrongFocus)
         self.get_tab().change_events = True
 
     def keyPressEvent(self, event):
-        if (self.get_tab().change_starting_point or self.get_tab().change_end_point or self.get_tab().change_events) and event.key() == Qt.Key.Key_Escape:
+        """
+        Needed to stop all the processing for the altering of the data
+        """
+        if (
+                self.get_tab().change_starting_point or self.get_tab().change_end_point or self.get_tab().change_events) and event.key() == Qt.Key.Key_Escape:
             if self.get_tab().change_starting_point:
                 QMessageBox.information(self, "Success", f"Terminated process to select new start")
             elif self.get_tab().change_end_point:
@@ -214,6 +232,9 @@ class MainWindow(QMainWindow):
             print('Selectie uitgeschakeld')
 
     def show_user_manual(self):
+        """
+        Create the manual pop-up
+        """
         from widget_manual import Manual
 
         popup = Manual(self)
@@ -294,6 +315,9 @@ class MainWindow(QMainWindow):
             self.status_widget.set_status("disconnected")
 
     def collect_data(self):
+        """
+        Extract all the data from the corresponding folder from the start-up
+        """
         for filename in os.listdir(self.folder):
             file_path = os.path.join(self.folder, filename)
 
@@ -315,6 +339,9 @@ class MainWindow(QMainWindow):
                     continue
 
     def extract_excel(self, file):
+        """
+        Extract all the data from the corresponding excel from collect_data
+        """
         from widget_trials import TrailTab, TrialState
 
         trial_data = pd.read_excel(file)
@@ -325,6 +352,8 @@ class MainWindow(QMainWindow):
         xs = trial_data.iloc[:, 0].values
         if isinstance(tab, TrailTab) and len(xs) > 1:
             tab.trial_state = TrialState.completed
+            tab.original_data_file = True
+
             self.update_toolbar()
 
             tab.xs.clear()
@@ -352,9 +381,38 @@ class MainWindow(QMainWindow):
                 tab.log_left.append((x1[i], y1[i], z1[i], v1[i],))
                 tab.log_right.append((x2[i], y2[i], z2[i], v2[i],))
 
+            try:
+                # add manual sign
+                if trial_data.shape[1] < 11:
+                    tab.event_log = [0]*NUMBER_EVENTS
+                elif self.manual_events:
+                    tab.event_log = trial_data.iloc[:, 12].values[0:NUMBER_EVENTS].tolist()
+                    if all(x == 0 for x in tab.event_log):
+                        tab.event_log = trial_data.iloc[:, 11].values[0:NUMBER_EVENTS].tolist()
+                else:
+                    tab.event_log = trial_data.iloc[:, 11].values[0:NUMBER_EVENTS].tolist()
+
+                self.events_present = not all(x == 0 for x in tab.event_log)
+
+                if trial_data.shape[1] < 13 or not self.manual_events:
+                    case = calculate_boxhand(tab.log_left, tab.log_right)
+                    tab.event_position = calculate_position_events(case)
+                else:
+                    tab.event_position = trial_data.iloc[:, 13].values[0:NUMBER_EVENTS].tolist()
+
+            finally:
+                if tab.event_log is None or len(tab.event_log) == 0:
+                    tab.event_log = [0] * NUMBER_EVENTS
+                else:
+                    print('here3')
+                    tab.event_log = [int(x) if x != 0 else 0 for x in tab.event_log]
+
             tab.update_plot(True, self)
 
     def add_notes(self, file):
+        """
+        Extract all the notes from the corresponding PDF from collect_data
+        """
         from widget_trials import TrailTab
 
         pdf = pikepdf.Pdf.open(file)
@@ -423,6 +481,9 @@ class MainWindow(QMainWindow):
         return scores
 
     def add_another_tab(self):
+        """
+        Add another tab to the window
+        """
         from widget_trials import TrailTab
 
         tab = TrailTab(self.num_trials, self.tab_widget)
@@ -430,6 +491,9 @@ class MainWindow(QMainWindow):
         self.num_trials += 1
 
     def update_toolbar(self):
+        """
+        Update all the buttons in the toolbar
+        """
         from widget_trials import TrialState
 
         tab = self.get_tab()
@@ -468,7 +532,6 @@ class MainWindow(QMainWindow):
             self.event_action.setEnabled(False)
             self.move_events_action.setEnabled(False)
 
-
     def start_current_reading(self):
         tab = self.get_tab()
 
@@ -495,6 +558,10 @@ class MainWindow(QMainWindow):
                 self.update_toolbar()
 
     def switch_to_next_tab(self):
+        """
+        Makes it possible to skip the trial if it's finished to speed up the recording of data
+        :return:
+        """
         if self.set_automatic:
             current_index = self.tab_widget.currentIndex()
             total_tabs = self.tab_widget.count()
@@ -504,6 +571,9 @@ class MainWindow(QMainWindow):
                 self.tab_widget.setCurrentIndex(next_index)
 
     def connecting(self):
+        """
+        Connect the sensor
+        """
         QMessageBox.information(self, "Info", "Started to connect. Please wait a bit.")
 
         if self.is_connected:
@@ -551,6 +621,10 @@ class MainWindow(QMainWindow):
         self.update_toolbar()
 
     def button_connect(self):
+        """
+        Creates the pop-up for the connection with the button
+        :return:
+        """
         from widget_button_tester import ButtonTester
 
         popup = ButtonTester(self)
@@ -576,6 +650,10 @@ class MainWindow(QMainWindow):
         self.update_toolbar()
 
     def calibration(self):
+        """
+        Calibrate the sensor with calibration_to_center(sys_id) of data_processing
+        :return:
+        """
         ret = QMessageBox.Cancel
         if not self.first_calibration:
             ret = QMessageBox.warning(self, "Warning",
@@ -611,10 +689,18 @@ class MainWindow(QMainWindow):
         self.get_tab().vt_plot()
 
     def process_tab(self):
+        """
+        Filter the data of the tab
+        """
         self.get_tab().process(self.b, self.a)
 
     def process_events(self):
+        """
+        Calculate all the events of each trial
+        """
         from widget_trials import TrailTab
+
+        self.switch_hands(True)
 
         go = False
         if self.events_present:
@@ -661,6 +747,50 @@ class MainWindow(QMainWindow):
 
             tab.update_plot(True)
 
+    def switch_hands(self, show_no_error=False):
+        """
+        Check if hands are inverted in the proces after calibration
+        :param show_no_error:
+        :return:
+        """
+        from widget_trials import TrailTab
+
+        self.lindex, self.rindex = self.rindex, self.lindex
+
+        change_tabs = []
+        active_tabs = 0
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+
+            if isinstance(tab, TrailTab):
+                if len(tab.xs) > 0:
+                    active_tabs += 1
+                    if tab.log_left[0][0] > tab.log_right[0][0]:
+                        tab.log_left, tab.log_right = tab.log_right, tab.log_left
+                        change_tabs.append(i)
+
+                print('done')
+
+            tab.update_plot(True)
+
+        if len(change_tabs) == 0:
+            text = 'No trials are changed'
+            if show_no_error: return
+        elif len(change_tabs) == active_tabs:
+            text = f"All trials changed"
+        elif len(change_tabs) == 1:
+            text = f'Trial {change_tabs[0]} changed'
+        elif len(change_tabs) <= active_tabs / 2:
+            missing = [i for i in range(10) if i not in change_tabs]
+            if len(missing) == 1:
+                text = f"All trials changed except for trial {missing[0]} changed"
+            else:
+                text = f"All trials changed except for trial {', '.join(str(n) for n in change_tabs)} changed"
+        else:
+            text = f"Trials {', '.join(str(n) for n in change_tabs)} changed"
+
+        QMessageBox.warning(self, "Warning", text)
+
     def set_automatic_tab(self, button):
         if button.isChecked():
             self.set_automatic = True
@@ -686,6 +816,9 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def make_pdf(self):
+        """
+        Make the preparation of the PDF to speed up the proces
+        """
         self.pdf = fpdf.FPDF()
         self.pdf.set_auto_page_break(auto=True, margin=15)
         self.pdf.add_page()
@@ -701,6 +834,9 @@ class MainWindow(QMainWindow):
         self.pdf.cell(0, 10, f"", ln=True)
 
     def download_excel(self):
+        """
+        Start the download of the files
+        """
         while True:
             selection_plot = QDialog(self)
             selection_plot.setWindowTitle("Select graph to save")
@@ -780,62 +916,70 @@ class MainWindow(QMainWindow):
 
             break
 
-    def add_plots_data(self, plot_index, case, xs, left_data, right_data, events):
+    def add_plots_data(self, plot_index, xs, left_data, right_data, events, event_position):
+        """
+        Plot the data in the PDF (needed to stay in MainThread)
+        :param plot_index: which plot has to be made (x,y,z,v) as index
+        :type plot_index: int
+        :param xs: the timestamps
+        :param left_data: the coordinates of the left hand
+        :param right_data: the coordinates of the right hand
+        :param events: the indexes of each event
+        :param event_position: the position of each event
+        """
         buf = io.BytesIO()
+        try:
+            fig, ax = plt.subplots()
 
-        fig, ax = plt.subplots()
+            ax.plot(xs, left_data, label='Left Sensor', color='green')
+            ax.plot(xs, right_data, label='Right Sensor', color='red')
 
-        ax.plot(xs, left_data, label='Left Sensor', color='green')
-        ax.plot(xs, right_data, label='Right Sensor', color='red')
+            legend_hands = ax.legend()
+            ax.add_artist(legend_hands)
 
-        legend_hands = ax.legend()
-        ax.add_artist(legend_hands)
-
-        if events[-1] != 0:
             x_positions = [xs[ei] for ei in events]
-            if case in [0, 2, 5, 7]:
-                y_positions = [left_data[ei] for ei in events[:3]]
-                y_positions += [right_data[ei] for ei in events[3:]]
-            elif case in [1, 3, 4, 6]:
-                y_positions = [right_data[ei] for ei in events[:3]]
-                y_positions += [left_data[ei] for ei in events[3:]]
-            else:
-                return
+            y_positions = [left_data[ei] if event_position[index] == 'Left' else
+                           right_data[ei] for index, ei in enumerate(events)]
 
             for i in range(NUMBER_EVENTS):
                 ax.scatter(x_positions[i], y_positions[i], c=COLORS_EVENT[i], label=LABEL_EVENT[i], s=32,
-                            zorder=15 - i)
+                           zorder=15 - i)
 
-        ax.set_title(
-            f"{'X' if plot_index == 0 else 'Y' if plot_index == 1 else 'Z' if plot_index == 2 else 'Velocity'} Plot")
-        ax.set_xlabel("Time (s)")
-        ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (m/s)"][plot_index]
-        ax.set_ylabel(ylabel)
+            ax.set_title(
+                f"{'X' if plot_index == 0 else 'Y' if plot_index == 1 else 'Z' if plot_index == 2 else 'Velocity'} Plot")
+            ax.set_xlabel("Time (s)")
+            ylabel = ["X Position (cm)", "Y Position (cm)", "Z Position (cm)", "Speed (m/s)"][plot_index]
+            ax.set_ylabel(ylabel)
 
-        if events[-1] != 0:
-            legend_elements = [None] * NUMBER_EVENTS
-            for i in range(NUMBER_EVENTS):
-                legend_elements[i] = Line2D([0], [0], marker='o', color='w', markerfacecolor=COLORS_EVENT[i],
-                                            markersize=10, label=LABEL_EVENT[i])
+            if events[-1] != 0:
+                legend_elements = [None] * NUMBER_EVENTS
+                for i in range(NUMBER_EVENTS):
+                    legend_elements[i] = Line2D([0], [0], marker='o', color='w', markerfacecolor=COLORS_EVENT[i],
+                                                markersize=10, label=LABEL_EVENT[i])
 
-            # Place legend below the plot
-            ax.legend(handles=legend_elements, loc='upper center',
-                       bbox_to_anchor=(0.5, -0.12), ncol=6)
+                # Place legend below the plot
+                ax.legend(handles=legend_elements, loc='upper center',
+                          bbox_to_anchor=(0.5, -0.12), ncol=6)
 
-        ax.grid(True)
+            ax.grid(True)
 
-        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-        plt.close(fig)
+            plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+            plt.close(fig)
 
-        buf.seek(0)
+            buf.seek(0)
 
-        self.pdf.image(buf, x=None, y=None, w=100)
-        self.pdf.ln(5)
-
-        buf.close()
-        self.worker.condition.wakeAll()
+            self.pdf.image(buf, x=None, y=None, w=100)
+            self.pdf.ln(5)
+        except Exception as e:
+            print(str(e))
+        finally:
+            buf.close()
+            self.worker.condition.wakeAll()
 
     def make_progress(self):
+        """
+        Make the progress bar pop-up
+        """
         from widget_progression_bar import ProgressionBar
 
         self.progression = ProgressionBar()
@@ -845,6 +989,9 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
 
     def finish_export(self):
+        """
+        Upload the PDF to the right directory
+        """
         print('finish')
         pdf_file = os.path.join(self.participant_folder, f"{self.name_pdf}.pdf")
         self.pdf.output(pdf_file)
@@ -862,8 +1009,12 @@ class MainWindow(QMainWindow):
 
 
 class ProgressionThread(QThread):
+    """
+    Makes it possible to have a progression bar and exports all calculation to a separate thread
+    Needed to let the mainthread handle all the relavant windows and updating of plot (otherwise not possible)
+    """
     progress = Signal(int)
-    pdf_ready_image = Signal(int, int, list, list, list, list)
+    pdf_ready_image = Signal(int, list, list, list, list, list)
     finished_file = Signal()
     error_occurred = Signal(str)
 
@@ -937,7 +1088,12 @@ class ProgressionThread(QThread):
                 "Right Sensor y (cm)": [pos[1] for pos in tab.log_right] if tab.xs else [],
                 "Right Sensor z (cm)": [pos[2] for pos in tab.log_right] if tab.xs else [],
                 "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right] if tab.xs else [],
-                "Score: ": [tab.get_score()]
+                "Score:": [tab.get_score()],
+                " ": [],
+                "Automatic events:": [tab.event_log[i] if tab.event_old_log[i] == 0 else tab.event_old_log[i] for i in
+                                      range(NUMBER_EVENTS)],
+                "Manual events:": [0] * NUMBER_EVENTS if all(e == 0 for e in tab.event_old_log) else tab.event_log,
+                "Position events:": tab.event_position
             }
             max_length = max(len(v) for v in data.values())
             for key in data:
@@ -964,9 +1120,11 @@ class ProgressionThread(QThread):
                                   data["Right Sensor y (cm)"] if pos_index == 1 else
                                   data["Right Sensor z (cm)"] if pos_index == 2 else
                                   data["Right Sensor v (m/s)"]][0]
+                    events = [ei if ei is not None else 0 for ei in tab.event_log]
 
                     self.mutex.lock()
-                    self.pdf_ready_image.emit(pos_index, tab.case_status, tab.xs, left_data, right_data, tab.event_log)
+                    self.pdf_ready_image.emit(pos_index, tab.xs, left_data, right_data, events,
+                                              tab.event_position)
                     self.condition.wait(self.mutex)
                     self.mutex.unlock()
 
@@ -977,7 +1135,12 @@ class ProgressionThread(QThread):
                 self.counter_progress += self.step_progress
                 self.progress.emit(round(self.counter_progress))
 
-            if tab.extra_parameters_bim and tab.get_score() == 3:
+            if tab.get_score() == 3:
+                events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
+                tab.extra_parameters_bim, tab.extra_parameters_uni = calculate_extra_parameters(events,
+                                                                                                  tab.log_left,
+                                                                                                  tab.log_right)
+
                 self.pdf.set_font("Arial", style="B", size=12)
                 self.pdf.cell(0, 10, 'Table', ln=True)
 
