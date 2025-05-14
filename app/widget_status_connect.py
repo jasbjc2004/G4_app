@@ -6,6 +6,9 @@ from PySide6.QtCore import Qt, QSize, Property
 
 
 class StatusDot(QWidget):
+    """
+    Needed for the circle at the button of the window
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self._status = "disconnected"
@@ -41,6 +44,9 @@ class StatusDot(QWidget):
 
 
 class StatusWidget(QWidget):
+    """
+    Needed for the widget in the status bar to check the connection
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QHBoxLayout(self)
