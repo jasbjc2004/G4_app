@@ -17,11 +17,11 @@ All files related to the software, all are needed to let it work. In this map is
 ## To-do
 * Make a fast start or a timer to start the reading of data (some delay in this version) -> change "_class ReadThread(QThread)_" or "_start_reading(self)_" in "_widget_trials.py_"
 * Make possible to change the constant value -> work with .txt-file or .json-file
-* Let the program search for artifects -> maybe check how fast the speed or any other coordinate changes & check if it's usefull and the behavior of it
+* Let the program search for artifacts -> maybe check how fast the speed or any other coordinate changes & check if it's usefull and the behavior of it
 * Compare between patients -> maybe add a new class like "_widget_trials.py_" to add the comparision, also possible with seperate pop-up
 * Make a summary of 1 patient (average of events) & plot on the rest of the trials -> seperate python-file for calculations + changes in "_update_plot(self, redraw=False, parent=None)_" of "_widget_trials.py_"
 * Use a neural network to calculate the events -> more data needed with manual events (or correct automatic events) & score (maybe also the case of movement) to train the NN => changes in "_data_processing.py_"
 * Add more sound -> changes in "_class SetUp(QDialog)_"
-* Make a back-up of the data -> save after every reading in a .cvs or .xsl (both very fast)
+* Make a back-up of the data -> save after every reading in a .cvs or .xsl (both very fast) or **better**: a server
 * Log possible errors to .txt to check what went wrong -> add global error handler + logger
 * Change sensor to fit in a glove
