@@ -103,7 +103,7 @@ class MainWindow(QMainWindow):
             self.tab_widget.addTab(tab, f"Trial {i + 1}")
 
         if self.folder:
-            self.collect_data()
+            self.collect_data(num_trials)
 
         self.main_layout.addWidget(self.tab_widget)
         self.update_toolbar()
@@ -314,10 +314,12 @@ class MainWindow(QMainWindow):
         else:
             self.status_widget.set_status("disconnected")
 
-    def collect_data(self):
+    def collect_data(self, number_trials):
         """
         Extract all the data from the corresponding folder from the start-up
         """
+        all_zeros = True
+
         for filename in os.listdir(self.folder):
             file_path = os.path.join(self.folder, filename)
 
@@ -333,10 +335,17 @@ class MainWindow(QMainWindow):
 
             elif filename.endswith('.pdf'):
                 try:
-                    self.add_notes(file_path)
+                    all_zeros = self.add_notes(file_path)
                 except:
                     QMessageBox.critical(self, "Error", f"Failed to get info from: {file_path}!")
                     continue
+
+        if all_zeros:
+            print("all scores are zero")
+            for i in range(number_trials):
+                tab = self.tab_widget.widget(i)
+                tab.button_pressed = True
+                tab.original_data_file = False
 
     def extract_excel(self, file):
         """
@@ -352,7 +361,6 @@ class MainWindow(QMainWindow):
         xs = trial_data.iloc[:, 0].values
         if isinstance(tab, TrailTab) and len(xs) > 1:
             tab.trial_state = TrialState.completed
-            tab.original_data_file = True
 
             self.update_toolbar()
 
@@ -382,6 +390,13 @@ class MainWindow(QMainWindow):
                 tab.log_right.append((x2[i], y2[i], z2[i], v2[i],))
 
             try:
+                if trial_data.shape[1] <= 8:
+                    tab.original_data_file = False
+                else:
+                    tab.original_data_file = True
+
+                print(tab.original_data_file)
+
                 # add manual sign
                 if trial_data.shape[1] < 11:
                     tab.event_log = [0]*NUMBER_EVENTS
@@ -395,11 +410,11 @@ class MainWindow(QMainWindow):
                 self.events_present = not all(x == 0 for x in tab.event_log)
 
                 if trial_data.shape[1] < 13 or not self.manual_events:
-                    case = calculate_boxhand(tab.log_left, tab.log_right)
-                    tab.event_position = calculate_position_events(case)
+                    tab.case_status = calculate_boxhand(tab.log_left, tab.log_right)
+                    tab.event_position = calculate_position_events(tab.case_status)
+                    # tab.score.setCurrentIndex(tab.get_estimated_score())
                 else:
                     tab.event_position = trial_data.iloc[:, 13].values[0:NUMBER_EVENTS].tolist()
-
             finally:
                 if tab.event_log is None or len(tab.event_log) == 0:
                     tab.event_log = [0] * NUMBER_EVENTS
@@ -419,6 +434,7 @@ class MainWindow(QMainWindow):
 
         trial_number = 0
         in_table = False
+        all_zeros = True
         for page in pdf.pages:
             pdf_content = page.get('/Contents').read_bytes().decode('utf-8')
             text = pdf_content.split('\n')
@@ -435,6 +451,7 @@ class MainWindow(QMainWindow):
                             score = int(rule_text.split()[3])
 
                             tab.score.setCurrentIndex(score)
+                            if score != 0: all_zeros = False
 
                     elif 'Trial' in rule_text and int(rule_text.split()[1][:-1]) == trial_number + 1:
                         in_table = False
@@ -445,6 +462,7 @@ class MainWindow(QMainWindow):
                             score = int(rule_text.split()[3])
 
                             tab.score.setCurrentIndex(score)
+                            if score != 0: all_zeros = False
 
                     elif trial_number == 0:
                         continue
@@ -458,6 +476,8 @@ class MainWindow(QMainWindow):
                     else:
                         if not in_table and rule_text != 'No Notes':
                             tab.notes_input.append(rule_text)
+
+        return all_zeros
 
     def get_tab(self):
         from widget_trials import TrailTab
