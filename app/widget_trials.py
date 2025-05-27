@@ -309,6 +309,7 @@ class TrailTab(QWidget):
 
         if self.event_log[-1] != 0:
             try:
+                self.first_event_guess = True
                 self.calculate_events(False, True)
             except:
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
@@ -347,6 +348,7 @@ class TrailTab(QWidget):
 
         if self.event_log[-1] != 0:
             try:
+                self.first_event_guess = True
                 self.calculate_events(False, True)
             except:
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
@@ -604,7 +606,8 @@ class TrailTab(QWidget):
             self.case_status = calculate_boxhand(self.log_left, self.log_right)
             print('done case')
             if self.first_event_guess:
-                if self.button_pressed or self.original_data_file and not \
+                print(self.original_data_file)
+                if (self.button_pressed or self.original_data_file) and not \
                         (self.original_data_file and self.get_score() == 0):
                     self.score.setCurrentIndex(self.get_estimated_score())
                     print('done')
