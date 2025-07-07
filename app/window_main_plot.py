@@ -30,7 +30,7 @@ from constants import MAX_ATTEMPTS, READ_SAMPLE, SERIAL_BUTTON, fs, fc, ORDER_FI
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False):
+    def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False, save=None):
         super().__init__()
 
         self.button_trigger = None
@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         self.worker = None
 
         self.sound = sound
+        self.participant_folder = None
 
         nyq = 0.5 * fs
         w = fc / nyq
@@ -80,6 +81,9 @@ class MainWindow(QMainWindow):
         thread_pdf = threading.Thread(target=self.make_pdf())
         thread_pdf.daemon = True
         thread_pdf.start()
+
+        self.save_dir = save
+        self.save_all = False
 
     def setup(self, num_trials):
         from widget_trials import TrailTab
@@ -117,8 +121,8 @@ class MainWindow(QMainWindow):
     def setup_menubar(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
-        excel_action = file_menu.addAction("Export to Excel and PDF")
-        excel_action.triggered.connect(self.download_excel)
+        pdf_action = file_menu.addAction("Export to PDF")
+        pdf_action.triggered.connect(self.download_pdf)
         tab_extra = file_menu.addAction("Add extra tab")
         tab_extra.triggered.connect(self.add_another_tab)
         file_menu.addSeparator()
@@ -853,7 +857,34 @@ class MainWindow(QMainWindow):
         self.pdf.multi_cell(0, 8, self.notes if self.notes else "No Additional Notes")
         self.pdf.cell(0, 10, f"", ln=True)
 
-    def download_excel(self):
+    def save_excel(self, index):
+        if self.thread and self.thread.isRunning():
+            self.thread.quit()
+            self.thread.wait()
+
+        self.save_all = False
+        if self.participant_folder is None:
+            self.participant_folder = os.path.join(self.save_dir, self.id_part)
+
+            counter = 0
+            while os.path.exists(self.participant_folder):
+                counter += 1
+                self.participant_folder = os.path.join(self.save_dir, self.id_part + f'({counter})')
+            os.makedirs(self.participant_folder, exist_ok=True)
+
+        self.thread = QThread()
+        self.worker = ProgressionThread(self, self.participant_folder, index)
+        self.worker.moveToThread(self.thread)
+
+        self.worker.pdf_ready_image.connect(self.add_plots_data)
+        self.worker.progress.connect(self.set_progress)
+        self.worker.finished_file.connect(self.finish_export)
+        self.worker.error_occurred.connect(self.show_error)
+
+        self.thread.started.connect(self.worker.run)
+        self.thread.start()
+
+    def download_pdf(self):
         """
         Start the download of the files
         """
@@ -861,15 +892,6 @@ class MainWindow(QMainWindow):
             selection_plot = QDialog(self)
             selection_plot.setWindowTitle("Select graph to save")
             layout = QVBoxLayout()
-
-            # Participant code input
-            name_layout = QHBoxLayout()
-            name_label = QLabel("Participant code:")
-            self.participant_code = QLineEdit()
-            self.participant_code.setText(self.id_part)
-            name_layout.addWidget(name_label)
-            name_layout.addWidget(self.participant_code)
-            layout.addLayout(name_layout)
 
             # Plot selection checkboxes
             checkboxes = [
@@ -895,33 +917,17 @@ class MainWindow(QMainWindow):
             if result == QDialog.Rejected:
                 return
 
-            if not self.participant_code.text().strip():
-                QMessageBox.warning(self, "Warning", "Participant code is required!")
-                continue
-
-            # File and folder selection
-            folder = QFileDialog.getExistingDirectory(self, "Select Save Directory", os.path.expanduser("~/Documents"))
-            if not folder:
-                QMessageBox.warning(self, "Warning", "No directory selected! Please try again.")
-                return
-
-            # Create participant folder
-            self.participant_folder = os.path.join(folder, self.participant_code.text())
-
-            counter = 0
-            while os.path.exists(self.participant_folder):
-                counter += 1
-                self.participant_folder = os.path.join(folder, self.participant_code.text() + f'({counter})')
-            os.makedirs(self.participant_folder, exist_ok=True)
-            self.name_pdf = self.participant_code.text()
+            self.name_pdf = self.id_part
 
             if self.thread and self.thread.isRunning():
                 self.thread.quit()
                 self.thread.wait()
 
+            self.save_all = True
+
             self.make_progress()
             self.thread = QThread()
-            self.worker = ProgressionThread(self, self.pdf, self.participant_folder,
+            self.worker = ProgressionThread(self, self.participant_folder, -1, self.pdf,
                                             [index for index in range(len(checkboxes)) if
                                              checkboxes[index].isChecked()])
             self.worker.moveToThread(self.thread)
@@ -1013,15 +1019,17 @@ class MainWindow(QMainWindow):
         Upload the PDF to the right directory
         """
         print('finish')
-        pdf_file = os.path.join(self.participant_folder, f"{self.name_pdf}.pdf")
-        self.pdf.output(pdf_file)
 
-        self.pdf = None
-        thread_pdf = threading.Thread(target=self.make_pdf())
-        thread_pdf.daemon = True
-        thread_pdf.start()
+        if self.save_all:
+            pdf_file = os.path.join(self.participant_folder, f"{self.name_pdf}.pdf")
+            self.pdf.output(pdf_file)
 
-        QMessageBox.information(self, "Success", f"Data saved in folder: {self.participant_folder}")
+            self.pdf = None
+            thread_pdf = threading.Thread(target=self.make_pdf())
+            thread_pdf.daemon = True
+            thread_pdf.start()
+
+            QMessageBox.information(self, "Success", f"Data saved in folder: {self.participant_folder}")
 
     def set_progress(self, value: int):
         print(f"Progress: {value}")
@@ -1038,7 +1046,7 @@ class ProgressionThread(QThread):
     finished_file = Signal()
     error_occurred = Signal(str)
 
-    def __init__(self, parent: MainWindow, pdf, part_folder, check):
+    def __init__(self, parent: MainWindow, part_folder, index=-1, pdf=None, check=None):
         super().__init__()
 
         self.pdf = pdf
@@ -1051,13 +1059,17 @@ class ProgressionThread(QThread):
 
         active_tabs = self.count_active_tabs()
         if active_tabs == 0: active_tabs = 100
-        if len(self.checkboxes) == 0:
+        if self.checkboxes and len(self.checkboxes) == 0:
             self.step_progress = 1 / active_tabs * 100
-        else:
+        elif self.checkboxes:
             self.step_progress = 1 / (active_tabs * len(self.checkboxes)) * 100
+        else:
+            self.step_progress = 1
 
         self.mutex = QMutex()
         self.condition = QWaitCondition()
+
+        self.index = index
 
     def count_active_tabs(self):
         from widget_trials import TrailTab
@@ -1072,20 +1084,24 @@ class ProgressionThread(QThread):
 
     def run(self):
         try:
-            self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
+            if self.pdf:
+                self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
 
-            for i in range(self.num_trials):
+            range_index = list(range(self.num_trials)) if self.index == -1 else [self.index]
+            print(range_index, self.index)
+            for i in range_index:
                 self.export_tab(i)
                 print(f'here {i}')
 
-            self.pdf.add_page()
-            self.pdf.set_font("Arial", style="B", size=14)
-            self.pdf.cell(0, 10, f"Average over all trials with score 3", ln=True)
-            self.pdf.set_font("Arial", size=12)
-            print(f'here {self.num_trials + 1}')
+            if self.pdf:
+                self.pdf.add_page()
+                self.pdf.set_font("Arial", style="B", size=14)
+                self.pdf.cell(0, 10, f"Average over all trials with score 3", ln=True)
+                self.pdf.set_font("Arial", size=12)
+                print(f'here {self.num_trials + 1}')
 
-            self.average_events_info()
-            print(f'here {self.num_trials + 2}')
+                self.average_events_info()
+                print(f'here {self.num_trials + 2}')
 
             self.finished_file.emit()
 
@@ -1121,87 +1137,90 @@ class ProgressionThread(QThread):
 
             df = pd.DataFrame(data)
             trial_file = os.path.join(self.participant_folder, f"trial_{index + 1}.xlsx")
+            if os.path.exists(trial_file):
+                os.remove(trial_file)
             df.to_excel(trial_file, index=False)
 
-            self.pdf.set_font("Arial", style="B", size=14)
-            self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()}' if tab.xs else ''}", ln=True)
-            self.pdf.set_font("Arial", size=12)
-            notes = tab.notes_input.toPlainText().strip()
-            self.pdf.multi_cell(0, 10, notes if notes else "No Notes")
-            self.pdf.ln(5)
+            if self.pdf:
+                self.pdf.set_font("Arial", style="B", size=14)
+                self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()}' if tab.xs else ''}", ln=True)
+                self.pdf.set_font("Arial", size=12)
+                notes = tab.notes_input.toPlainText().strip()
+                self.pdf.multi_cell(0, 10, notes if notes else "No Notes")
+                self.pdf.ln(5)
 
-            if tab.xs:
-                for pos_index in self.checkboxes:
-                    left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
-                                 data["Left Sensor y (cm)"] if pos_index == 1 else
-                                 data["Left Sensor z (cm)"] if pos_index == 2 else
-                                 data["Left Sensor v (m/s)"]][0]
-                    right_data = [data["Right Sensor x (cm)"] if pos_index == 0 else
-                                  data["Right Sensor y (cm)"] if pos_index == 1 else
-                                  data["Right Sensor z (cm)"] if pos_index == 2 else
-                                  data["Right Sensor v (m/s)"]][0]
-                    events = [ei if ei is not None else 0 for ei in tab.event_log]
+                if tab.xs:
+                    for pos_index in self.checkboxes:
+                        left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
+                                     data["Left Sensor y (cm)"] if pos_index == 1 else
+                                     data["Left Sensor z (cm)"] if pos_index == 2 else
+                                     data["Left Sensor v (m/s)"]][0]
+                        right_data = [data["Right Sensor x (cm)"] if pos_index == 0 else
+                                      data["Right Sensor y (cm)"] if pos_index == 1 else
+                                      data["Right Sensor z (cm)"] if pos_index == 2 else
+                                      data["Right Sensor v (m/s)"]][0]
+                        events = [ei if ei is not None else 0 for ei in tab.event_log]
 
-                    self.mutex.lock()
-                    self.pdf_ready_image.emit(pos_index, tab.xs, left_data, right_data, events,
-                                              tab.event_position)
-                    self.condition.wait(self.mutex)
-                    self.mutex.unlock()
+                        self.mutex.lock()
+                        self.pdf_ready_image.emit(pos_index, tab.xs, left_data, right_data, events,
+                                                  tab.event_position)
+                        self.condition.wait(self.mutex)
+                        self.mutex.unlock()
 
+                        self.counter_progress += self.step_progress
+                        self.progress.emit(round(self.counter_progress))
+
+                if self.counter_progress < (index + 1) * self.step_progress:
                     self.counter_progress += self.step_progress
                     self.progress.emit(round(self.counter_progress))
 
-            if self.counter_progress < (index + 1) * self.step_progress:
-                self.counter_progress += self.step_progress
-                self.progress.emit(round(self.counter_progress))
+                if tab.get_score() == 3:
+                    events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
+                    tab.extra_parameters_bim, tab.extra_parameters_uni = calculate_extra_parameters(events,
+                                                                                                      tab.log_left,
+                                                                                                      tab.log_right)
 
-            if tab.get_score() == 3:
-                events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
-                tab.extra_parameters_bim, tab.extra_parameters_uni = calculate_extra_parameters(events,
-                                                                                                  tab.log_left,
-                                                                                                  tab.log_right)
+                    self.pdf.set_font("Arial", style="B", size=12)
+                    self.pdf.cell(0, 10, 'Table', ln=True)
 
-                self.pdf.set_font("Arial", style="B", size=12)
-                self.pdf.cell(0, 10, 'Table', ln=True)
+                    col_widths = [45, 60, 40]
+                    self.pdf.set_font('Arial', '', 12)
 
-                col_widths = [45, 60, 40]
-                self.pdf.set_font('Arial', '', 12)
+                    data = [
+                        ['', 'Parameter', 'Value'],
+                        ['Bimanual', 'Total time', str(round(tab.extra_parameters_bim[0], 2))],
+                        ['', 'Temporal coupling', str(round(tab.extra_parameters_bim[1], 2))],
+                        ['', 'Movement overlap', str(round(tab.extra_parameters_bim[2], 2))],
+                        ['', 'Goal synchronization', str(round(tab.extra_parameters_bim[3], 2))],
 
-                data = [
-                    ['', 'Parameter', 'Value'],
-                    ['Bimanual', 'Total time', str(round(tab.extra_parameters_bim[0], 2))],
-                    ['', 'Temporal coupling', str(round(tab.extra_parameters_bim[1], 2))],
-                    ['', 'Movement overlap', str(round(tab.extra_parameters_bim[2], 2))],
-                    ['', 'Goal synchronization', str(round(tab.extra_parameters_bim[3], 2))],
+                        ['Unimanual', 'Time box hand', str(round(tab.extra_parameters_uni[0], 2))],
+                        ['', 'Time 1e phase BH', str(round(tab.extra_parameters_uni[1], 2))],
+                        ['', 'Time 2e phase BH', str(round(tab.extra_parameters_uni[2], 2))],
+                        ['', 'Time trigger hand', str(round(tab.extra_parameters_uni[3], 2))],
+                        ['', 'Smoothness BH', str(round(tab.extra_parameters_uni[4], 2))],
+                        ['', 'Smoothness TH', str(round(tab.extra_parameters_uni[5], 2))],
+                        ['', 'Path length BH', str(round(tab.extra_parameters_uni[6], 2))],
+                        ['', 'Path 1e phase BH', str(round(tab.extra_parameters_uni[7], 2))],
+                        ['', 'Path 2e phase BH', str(round(tab.extra_parameters_uni[8], 2))],
+                        ['', 'Path length TH', str(round(tab.extra_parameters_uni[9], 2))],
+                    ]
 
-                    ['Unimanual', 'Time box hand', str(round(tab.extra_parameters_uni[0], 2))],
-                    ['', 'Time 1e phase BH', str(round(tab.extra_parameters_uni[1], 2))],
-                    ['', 'Time 2e phase BH', str(round(tab.extra_parameters_uni[2], 2))],
-                    ['', 'Time trigger hand', str(round(tab.extra_parameters_uni[3], 2))],
-                    ['', 'Smoothness BH', str(round(tab.extra_parameters_uni[4], 2))],
-                    ['', 'Smoothness TH', str(round(tab.extra_parameters_uni[5], 2))],
-                    ['', 'Path length BH', str(round(tab.extra_parameters_uni[6], 2))],
-                    ['', 'Path 1e phase BH', str(round(tab.extra_parameters_uni[7], 2))],
-                    ['', 'Path 2e phase BH', str(round(tab.extra_parameters_uni[8], 2))],
-                    ['', 'Path length TH', str(round(tab.extra_parameters_uni[9], 2))],
-                ]
+                    line_height = 10
+                    self.pdf.set_fill_color(235, 235, 235)  # lichtgrijs
+                    self.pdf.set_text_color(0, 0, 0)
 
-                line_height = 10
-                self.pdf.set_fill_color(235, 235, 235)  # lichtgrijs
-                self.pdf.set_text_color(0, 0, 0)
+                    for row_ind, row in enumerate(data):
+                        self.pdf.set_x(20)
+                        first_row = (row_ind == 0)
 
-                for row_ind, row in enumerate(data):
-                    self.pdf.set_x(20)
-                    first_row = (row_ind == 0)
+                        for col_ind, datum in enumerate(row):
+                            fill = first_row or col_ind == 0
+                            align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
+                            style = 'B' if first_row or col_ind == 0 else ''
+                            self.pdf.set_font("Arial", style, size=12)
+                            self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
 
-                    for col_ind, datum in enumerate(row):
-                        fill = first_row or col_ind == 0
-                        align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
-                        style = 'B' if first_row or col_ind == 0 else ''
-                        self.pdf.set_font("Arial", style, size=12)
-                        self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
-
-                    self.pdf.ln(line_height)
+                        self.pdf.ln(line_height)
 
     def average_events_info(self):
         from widget_trials import TrailTab
