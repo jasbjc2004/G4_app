@@ -6,6 +6,8 @@ from constants import MAX_HEIGHT_NEEDED, POSITION_BUTTON, MAX_LENGTH_NEEDED, MIN
 from sensor_G4Track import *
 import time
 
+from tensorflow import keras
+
 """
 All functions needed for the data processing and calibration
 """
@@ -76,6 +78,18 @@ def calibration_to_center(sys_id):
         attempt += 1
 
     return None, None, None, False
+
+
+def predict_score(pos_left, pos_right):
+    model = keras.models.load_model('scoring_model.keras')
+
+    left_hand = np.array(pos_left)
+    right_hand = np.array(pos_right)
+    hands = np.concatenate([left_hand, right_hand], axis=1)
+
+    predictions = model.predict(hands) * 3.0
+    print(predictions)
+    return predictions
 
 
 def calculate_boxhand(pos_left, pos_right):
