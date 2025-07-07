@@ -5,9 +5,9 @@ import pygame
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QVBoxLayout, QPushButton, QLineEdit, QLabel, QHBoxLayout,
-    QDateEdit, QTextEdit, QMessageBox, QComboBox, QDialog, QCheckBox,
+    QDateEdit, QTextEdit, QMessageBox, QComboBox, QDialog, QCheckBox, QFileDialog,
 )
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, QSize
 
 from window_main_plot import MainWindow
 
@@ -25,6 +25,8 @@ class SetUp(QDialog):
         file_directory = (os.path.dirname(os.path.abspath(__file__)))
         dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')
         self.setWindowIcon(QIcon(dir_icon))
+
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
 
         main_layout = QVBoxLayout()
 
@@ -58,6 +60,22 @@ class SetUp(QDialog):
         date_layout.addWidget(date_label)
         date_layout.addWidget(self.date_input)
 
+        dir_layout = QHBoxLayout()
+        map_button = QPushButton()
+        map_button.clicked.connect(self.browse_dir)
+        map_icon = QIcon(os.path.join(file_directory, 'NEEDED/PICTURES/map.png'))
+        map_button.setIcon(map_icon)
+        map_button.setIconSize(QSize(15, 15))
+        dir_layout.addWidget(map_button)
+        self.path = QLineEdit()
+        self.full_path = ""
+        if folder:
+            self.set_dir(folder)
+        else:
+            self.set_dir(os.path.expanduser("~/Documents"))
+        self.path.setReadOnly(True)
+        dir_layout.addWidget(self.path)
+
         # Additional Notes
         notes_layout = QVBoxLayout()
         notes_label = QLabel("Additional Notes:")
@@ -84,6 +102,7 @@ class SetUp(QDialog):
         form_layout.addLayout(name_layout)
         form_layout.addLayout(assessor_layout)
         form_layout.addLayout(date_layout)
+        form_layout.addLayout(dir_layout)
         form_layout.addLayout(trial_layout)
         form_layout.addLayout(notes_layout)
 
@@ -106,11 +125,10 @@ class SetUp(QDialog):
 
         self.sound = list()
         pygame.mixer.init()
-        file_directory = (os.path.dirname(os.path.abspath(__file__)))
-        dir_sound = (os.path.join(file_directory,'NEEDED/MUSIC/Bumba.mp3'),
-                     os.path.join(file_directory,'NEEDED/MUSIC/applause.mp3'),
-                     os.path.join(file_directory,'NEEDED/MUSIC/Bluey.mp3'),
-                     os.path.join(file_directory,'NEEDED/MUSIC/bong.mp3'))
+        dir_sound = (os.path.join(file_directory, 'NEEDED/MUSIC/Bumba.mp3'),
+                     os.path.join(file_directory, 'NEEDED/MUSIC/applause.mp3'),
+                     os.path.join(file_directory, 'NEEDED/MUSIC/Bluey.mp3'),
+                     os.path.join(file_directory, 'NEEDED/MUSIC/bong.mp3'))
 
         threads_sound = [threading.Thread(target=self.load_sound, args=(dir_sound[i],)) for i in range(len(dir_sound))]
         for i in range(len(threads_sound)):
@@ -119,6 +137,23 @@ class SetUp(QDialog):
 
         for t in threads_sound:
             t.join()
+
+    def browse_dir(self):
+        path_text = self.path.text()
+
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Save Directory",
+            path_text,
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+        )
+        if folder:
+            self.set_dir(folder)
+
+    def set_dir(self, folder):
+        self.full_path = folder
+
+        self.path.setPlaceholderText(folder)
 
     def save_button_pressed(self):
         if self.name_input.text().strip() == "":
@@ -129,14 +164,18 @@ class SetUp(QDialog):
                 num_trials = self.combo_box.currentData()
                 self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
                                              self.date_input.text(), num_trials, self.notes_input.toPlainText().strip(),
-                                             self.sound, self.folder, self.negative_z.isChecked(), self.manual_events.isChecked())
+                                             self.sound, self.folder, self.negative_z.isChecked(),
+                                             self.manual_events.isChecked(), self.full_path
+                                             )
                 self.mainwindow.show()
                 self.close()
         else:
             num_trials = self.combo_box.currentData()
             self.mainwindow = MainWindow(self.name_input.text(), self.assessor_input.text(),
                                          self.date_input.text(), num_trials, self.notes_input.toPlainText().strip(),
-                                         self.sound, self.folder, self.negative_z.isChecked(), self.manual_events.isChecked())
+                                         self.sound, self.folder, self.negative_z.isChecked(),
+                                         self.manual_events.isChecked(), self.full_path
+                                         )
             self.mainwindow.show()
             self.close()
 
