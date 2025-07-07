@@ -21,7 +21,7 @@ from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from data_processing import calculate_boxhand, calculate_e6, calculate_events, calculate_extra_parameters, \
-    calculate_position_events
+    calculate_position_events, predict_score
 from sensor_G4Track import get_frame_data
 
 from scipy import signal
@@ -386,6 +386,7 @@ class TrailTab(QWidget):
                 main_window.update_toolbar()
 
             self.update_plot(True)
+            main_window.save_excel(self.trial_number)
 
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
@@ -600,6 +601,8 @@ class TrailTab(QWidget):
     def calculate_events(self, got_folder=False, go=False):
         if go or (self.event_log[-1] == 0 and (self.button_pressed or READ_SAMPLE or got_folder)):
             if go: self.remove_added_text()
+
+            predict_score(self.log_left, self.log_right)
             
             self.event_log[-1] = calculate_e6(self.xs)
 
