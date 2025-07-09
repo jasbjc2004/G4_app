@@ -1,9 +1,6 @@
 import os
 import subprocess
 import sys
-import shutil
-import glob
-import winreg
 
 """
 code to load all the important files and make an .exe from the main-file to a working project

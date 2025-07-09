@@ -1,8 +1,7 @@
 import numpy as np
 from scipy.signal import argrelextrema
 
-from constants import MAX_HEIGHT_NEEDED, POSITION_BUTTON, MAX_LENGTH_NEEDED, MIN_HEIGHT_NEEDED, MIN_LENGTH_NEEDED, \
-    THRESHOLD_BOTH_HANDS, SPEED_THRESHOLD, HEIGHT_BOX, THRESHOLD_CHANGED_HANDS_MEAS, fs, NUMBER_EVENTS
+from widget_settings import manage_settings
 from sensor_G4Track import *
 import time
 
@@ -11,6 +10,12 @@ from tensorflow import keras
 """
 All functions needed for the data processing and calibration
 """
+
+# USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
+
+file_directory = (os.path.dirname(os.path.abspath(__file__)))
+model_dir = os.path.join(file_directory, 'scoring_model.keras')
+model = keras.models.load_model(model_dir)
 
 
 def calibration_to_center(sys_id):
@@ -22,11 +27,11 @@ def calibration_to_center(sys_id):
     :return: the sensor who is on the left and right hand
     :rtype: int, int, int, bool
     """
-    TRESHOLD = 0.01
-    MAX_ATTEMPTS = 5
+    MAX_ATTEMPTS_CALIBRATION = manage_settings.get("Data-processing", "MAX_ATTEMPTS_CALIBRATION")
+    THRESHOLD_CALIBRATION = manage_settings.get("Data-processing", "THRESHOLD_CALIBRATION")
     attempt = 0
 
-    while attempt < MAX_ATTEMPTS:
+    while attempt < MAX_ATTEMPTS_CALIBRATION:
         frame_reference_orientation_reset(sys_id)
         frame_reference_translation_reset(sys_id)
 
@@ -72,7 +77,7 @@ def calibration_to_center(sys_id):
         print(f"sensor: {pos_left, pos_right}")
 
         time.sleep(2)
-        if abs(abs(pos_left[0]) - pos_right[0]) < TRESHOLD:
+        if abs(abs(pos_left[0]) - pos_right[0]) < THRESHOLD_CALIBRATION:
             return hub_id, lsen, rsen, True
 
         attempt += 1
@@ -81,15 +86,22 @@ def calibration_to_center(sys_id):
 
 
 def predict_score(pos_left, pos_right):
-    model = keras.models.load_model('scoring_model.keras')
-
     left_hand = np.array(pos_left)
     right_hand = np.array(pos_right)
+    print(left_hand.shape, right_hand.shape)
     hands = np.concatenate([left_hand, right_hand], axis=1)
+    hands = np.expand_dims(hands, axis=0)
+    print(hands.shape)
 
-    predictions = model.predict(hands) * 3.0
-    print(predictions)
-    return predictions
+    try:
+        prediction = model.predict(hands) * 3.0
+    except Exception as error:
+        prediction = -1
+        print(error)
+
+    print(prediction)
+    print(round(prediction[0][0]))
+    return round(prediction[0][0])
 
 
 def calculate_boxhand(pos_left, pos_right):
@@ -107,6 +119,15 @@ def calculate_boxhand(pos_left, pos_right):
         6 if the hands switched, but right pressed
         7 if the hands switched, but left pressed
     """
+    MAX_HEIGHT_NEEDED = manage_settings.get("Data-processing", "MAX_HEIGHT_NEEDED")
+    POSITION_BUTTON = manage_settings.get("Data-processing", "POSITION_BUTTON")
+    MAX_LENGTH_NEEDED = manage_settings.get("Data-processing", "MAX_LENGTH_NEEDED")
+    MIN_HEIGHT_NEEDED = manage_settings.get("Data-processing", "MIN_HEIGHT_NEEDED")
+    MIN_LENGTH_NEEDED = manage_settings.get("Data-processing", "MIN_LENGTH_NEEDED")
+    THRESHOLD_BOTH_HANDS = manage_settings.get("Data-processing", "THRESHOLD_BOTH_HANDS")
+    HEIGHT_BOX = manage_settings.get("Data-processing", "HEIGHT_BOX")
+    THRESHOLD_CHANGED_HANDS_MEAS = manage_settings.get("Data-processing", "THRESHOLD_CHANGED_HANDS_MEAS")
+
     start_left = pos_left[0]
     start_right = pos_right[0]
 
@@ -115,8 +136,8 @@ def calculate_boxhand(pos_left, pos_right):
     for i in range(-1, -len(pos_left), -1):
         if pos_left[i][2] < MAX_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] < MAX_LENGTH_NEEDED + start_left[1]:
             counter_left -= 1
-        if pos_right[i][2] < MAX_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] < MAX_LENGTH_NEEDED + start_right[
-            1]:
+        if pos_right[i][2] < MAX_HEIGHT_NEEDED + start_right[2] and \
+                pos_right[i][1] < MAX_LENGTH_NEEDED + start_right[1]:
             counter_right -= 1
 
         if pos_left[i][2] > MIN_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] > MIN_LENGTH_NEEDED + start_left[1]:
@@ -176,6 +197,11 @@ def calculate_events(pos_left, pos_right, case, score):
     :param score: score of the movement (currently not used)
     :return: list of the events
     """
+    MAX_HEIGHT_NEEDED = manage_settings.get("Data-processing", "MAX_HEIGHT_NEEDED")
+    MAX_LENGTH_NEEDED = manage_settings.get("Data-processing", "MAX_LENGTH_NEEDED")
+    SPEED_THRESHOLD = manage_settings.get("Data-processing", "SPEED_THRESHOLD")
+    fs = manage_settings.get("Sensors", "fs")
+
     if case == 0 or case == 2 or case == 7:
         trigger_hand, box_hand = pos_right, pos_left
     elif case == 1 or case == 3 or case == 6:
@@ -252,6 +278,8 @@ def calculate_position_events(case_status):
     :param case_status: case as a result of calculate_boxhand
     :return: the position of the events
     """
+    NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+
     if case_status in [0, 2, 6]:
         return ['Left'] * 3 + ['Right'] * 3
     elif case_status in [1, 3, 7]:
@@ -281,6 +309,8 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     :param box_hand: coordinates of the box hand
     :return: 4 bimanual and 10 unimanual parameters
     """
+    fs = manage_settings.get("Sensors", "fs")
+
     e1, e2, e3, e4, e5, e6 = events
     bx = np.array([pos[0] for pos in box_hand])
     by = np.array([pos[1] for pos in box_hand])

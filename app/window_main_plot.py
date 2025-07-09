@@ -10,9 +10,9 @@ import fpdf
 
 from PySide6.QtWidgets import (
     QVBoxLayout, QMainWindow, QWidget,
-    QLineEdit, QLabel, QHBoxLayout, QMessageBox,
+    QMessageBox,
     QToolBar, QStatusBar, QTabWidget,
-    QFileDialog, QDialog, QCheckBox, QDialogButtonBox,
+    QDialog, QCheckBox, QDialogButtonBox,
 )
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import QSize, Signal, QThread, QMutex, QWaitCondition, Qt
@@ -25,8 +25,9 @@ from data_processing import calibration_to_center, calculate_boxhand, calculate_
 
 from scipy import signal
 
-from constants import MAX_ATTEMPTS, READ_SAMPLE, SERIAL_BUTTON, fs, fc, ORDER_FILTER, NUMBER_EVENTS, COLORS_EVENT, \
-    LABEL_EVENT
+from thread_reading import ReadThread
+from widget_settings import manage_settings
+from constants import READ_SAMPLE
 
 
 class MainWindow(QMainWindow):
@@ -69,9 +70,14 @@ class MainWindow(QMainWindow):
 
         self.thread = None
         self.worker = None
+        self.data_thread = ReadThread(self)
 
         self.sound = sound
         self.participant_folder = None
+
+        fs = manage_settings.get("Sensors", "fs")
+        fc = manage_settings.get("Sensors", "fc")
+        ORDER_FILTER = manage_settings.get("Data-processing", "ORDER_FILTER")
 
         nyq = 0.5 * fs
         w = fc / nyq
@@ -84,6 +90,8 @@ class MainWindow(QMainWindow):
 
         self.save_dir = save
         self.save_all = False
+
+        self.saved_data = True
 
     def setup(self, num_trials):
         from widget_trials import TrailTab
@@ -125,6 +133,9 @@ class MainWindow(QMainWindow):
         pdf_action.triggered.connect(self.download_pdf)
         tab_extra = file_menu.addAction("Add extra tab")
         tab_extra.triggered.connect(self.add_another_tab)
+        file_menu.addSeparator()
+        tab_setting = file_menu.addAction("Settings")
+        tab_setting.triggered.connect(self.open_settings)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("Quit")
         quit_action.triggered.connect(self.close)
@@ -200,6 +211,14 @@ class MainWindow(QMainWindow):
         popup = Help(self)
         popup.show()
 
+    def open_settings(self):
+        from widget_settings import Settings
+        popup = Settings(parent=self)
+        popup.show()
+
+    def update_plot(self):
+        self.get_tab().update_plot(True)
+
     def new_startpoint(self):
         QMessageBox.information(self, "Information", f"Select a new point on the graph ([ESC] to cancel)")
         self.setFocusPolicy(Qt.StrongFocus)
@@ -233,7 +252,6 @@ class MainWindow(QMainWindow):
             self.get_tab().change_end_point = False
             self.get_tab().change_events = False
             self.setFocusPolicy(Qt.NoFocus)
-            print('Selectie uitgeschakeld')
 
     def show_user_manual(self):
         """
@@ -245,6 +263,8 @@ class MainWindow(QMainWindow):
         popup.show()
 
     def setup_toolbar(self):
+        SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
+
         toolbar = QToolBar("My main toolbar")
         toolbar.setIconSize(QSize(16, 16))
         self.addToolBar(toolbar)
@@ -258,7 +278,10 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.connection_action)
 
         self.calibrate_action = QAction("Calibrate", self)
-        self.calibrate_action.setEnabled(False)
+        if READ_SAMPLE:
+            self.calibrate_action.setEnabled(True)
+        else:
+            self.calibrate_action.setEnabled(False)
         self.calibrate_action.setStatusTip("Calibrate the sensor")
         self.calibrate_action.triggered.connect(lambda: self.calibration())
         toolbar.addAction(self.calibrate_action)
@@ -355,6 +378,8 @@ class MainWindow(QMainWindow):
         """
         Extract all the data from the corresponding excel from collect_data
         """
+        NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+
         from widget_trials import TrailTab, TrialState
 
         trial_data = pd.read_excel(file)
@@ -399,8 +424,6 @@ class MainWindow(QMainWindow):
                 else:
                     tab.original_data_file = True
 
-                print(tab.original_data_file)
-
                 # add manual sign
                 if trial_data.shape[1] < 11:
                     tab.event_log = [0]*NUMBER_EVENTS
@@ -423,7 +446,6 @@ class MainWindow(QMainWindow):
                 if tab.event_log is None or len(tab.event_log) == 0:
                     tab.event_log = [0] * NUMBER_EVENTS
                 else:
-                    print('here3')
                     tab.event_log = [int(x) if x != 0 else 0 for x in tab.event_log]
 
             tab.update_plot(True, self)
@@ -558,16 +580,20 @@ class MainWindow(QMainWindow):
 
     def start_current_reading(self):
         tab = self.get_tab()
+        self.saved_data = False
 
         if tab is not None:
+            self.data_thread.start_tab_reading(tab)
             tab.start_reading()
             self.tab_widget.tabBar().setEnabled(False)
 
     def stop_current_reading(self):
         tab = self.get_tab()
+        self.saved_data = False
 
         if tab is not None:
             tab.stop_reading()
+            self.data_thread.stop_current_reading()
             self.tab_widget.tabBar().setEnabled(True)
 
     def reset_current_reading(self):
@@ -580,6 +606,9 @@ class MainWindow(QMainWindow):
             if ret == QMessageBox.Yes:
                 tab.reset_reading()
                 self.update_toolbar()
+
+    def signal_text_changed(self):
+        self.saved_data = False
 
     def switch_to_next_tab(self):
         """
@@ -598,6 +627,8 @@ class MainWindow(QMainWindow):
         """
         Connect the sensor
         """
+        MAX_ATTEMPTS_CONNECT = manage_settings.get("Sensors", "MAX_ATTEMPTS_CONNECT")
+
         QMessageBox.information(self, "Info", "Started to connect. Please wait a bit.")
 
         if self.is_connected:
@@ -614,7 +645,7 @@ class MainWindow(QMainWindow):
 
         attempt = 0
 
-        while self.dongle_id is None and attempt < MAX_ATTEMPTS:
+        while self.dongle_id is None and attempt < MAX_ATTEMPTS_CONNECT:
             connected, self.dongle_id = initialize_system(src_cfg_file)
             attempt += 1
 
@@ -688,17 +719,19 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Info", "Started to calibrate. "
                                                   "Please wait a bit and keep the sensors at a fixed position.")
             try:
-                self.hub_id, self.lindex, self.rindex, self.calibration_status = calibration_to_center(self.dongle_id)
+                self.hub_id, self.lindex, self.rindex, calibration_status = calibration_to_center(self.dongle_id)
             except:
-                self.calibration_status = False
-            # self.calibration_status = True
+                calibration_status = False
+            finally:
+                if READ_SAMPLE: calibration_status = True
 
-            if not self.calibration_status:
+            if not calibration_status:
                 QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
             else:
                 self.first_calibration = False
                 self.update_toolbar()
-                QMessageBox.information(self, "Success", "Successfully callibrated to sensors!")
+                QMessageBox.information(self, "Success", "Successfully calibrated to sensors!")
+                self.data_thread.start()
 
     def xt_plot(self):
         self.get_tab().xt_plot()
@@ -717,6 +750,7 @@ class MainWindow(QMainWindow):
         Filter the data of the tab
         """
         self.get_tab().process(self.b, self.a)
+        self.saved_data = False
 
     def process_events(self):
         """
@@ -744,6 +778,7 @@ class MainWindow(QMainWindow):
                     tab.calculate_events((self.folder is not None), go)
 
             self.events_present = True
+        self.saved_data = False
 
     def plot_absolute_x(self, button):
         if button.isChecked():
@@ -767,7 +802,6 @@ class MainWindow(QMainWindow):
                     temp = list(tab.log_right[index])
                     temp[2] = -temp[2]
                     tab.log_right[index] = tuple(temp)
-                print('done')
 
             tab.update_plot(True)
 
@@ -792,8 +826,6 @@ class MainWindow(QMainWindow):
                     if tab.log_left[0][0] > tab.log_right[0][0]:
                         tab.log_left, tab.log_right = tab.log_right, tab.log_left
                         change_tabs.append(i)
-
-                print('done')
 
             tab.update_plot(True)
 
@@ -822,22 +854,33 @@ class MainWindow(QMainWindow):
             self.set_automatic = False
 
     def closeEvent(self, event):
-        ret = QMessageBox.warning(self, "Warning",
-                                  "Are you sure you want to quit the application?",
-                                  QMessageBox.Yes | QMessageBox.Cancel)
-        if ret == QMessageBox.Yes:
-            if self.thread and self.thread.isRunning():
-                self.thread.quit()
-                self.thread.wait()
-
-            close_sensor()
-
-            if not pygame.mixer.get_init():
-                pygame.mixer.quit()
-
-            event.accept()
+        if not self.saved_data:
+            ret = QMessageBox.warning(self, "Warning",
+                                      "Are you sure you want to quit the application? There is still unsaved data!",
+                                      QMessageBox.Yes | QMessageBox.Cancel)
+            if ret == QMessageBox.Yes:
+                self.full_close_app(event)
+            else:
+                event.ignore()
         else:
-            event.ignore()
+            self.full_close_app(event)
+
+    def full_close_app(self, event):
+        if self.thread and self.thread.isRunning():
+            self.thread.quit()
+            self.thread.wait()
+
+        if self.data_thread and self.data_thread.isRunning():
+            self.data_thread.stop()
+            self.data_thread.quit()
+            self.data_thread.wait()
+
+        close_sensor()
+
+        if not pygame.mixer.get_init():
+            pygame.mixer.quit()
+
+        event.accept()
 
     def make_pdf(self):
         """
@@ -864,13 +907,7 @@ class MainWindow(QMainWindow):
 
         self.save_all = False
         if self.participant_folder is None:
-            self.participant_folder = os.path.join(self.save_dir, self.id_part)
-
-            counter = 0
-            while os.path.exists(self.participant_folder):
-                counter += 1
-                self.participant_folder = os.path.join(self.save_dir, self.id_part + f'({counter})')
-            os.makedirs(self.participant_folder, exist_ok=True)
+            self.make_dir()
 
         self.thread = QThread()
         self.worker = ProgressionThread(self, self.participant_folder, index)
@@ -883,6 +920,15 @@ class MainWindow(QMainWindow):
 
         self.thread.started.connect(self.worker.run)
         self.thread.start()
+
+    def make_dir(self):
+        self.participant_folder = os.path.join(self.save_dir, self.id_part)
+
+        counter = 0
+        while os.path.exists(self.participant_folder):
+            counter += 1
+            self.participant_folder = os.path.join(self.save_dir, self.id_part + f'({counter})')
+        os.makedirs(self.participant_folder, exist_ok=True)
 
     def download_pdf(self):
         """
@@ -925,6 +971,9 @@ class MainWindow(QMainWindow):
 
             self.save_all = True
 
+            if self.participant_folder is None:
+                self.make_dir()
+
             self.make_progress()
             self.thread = QThread()
             self.worker = ProgressionThread(self, self.participant_folder, -1, self.pdf,
@@ -953,6 +1002,10 @@ class MainWindow(QMainWindow):
         :param events: the indexes of each event
         :param event_position: the position of each event
         """
+        COLORS_EVENT = manage_settings.get("Events", "COLORS_EVENT")
+        LABEL_EVENT = manage_settings.get("Events", "LABEL_EVENT")
+        NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+
         buf = io.BytesIO()
         try:
             fig, ax = plt.subplots()
@@ -1018,7 +1071,6 @@ class MainWindow(QMainWindow):
         """
         Upload the PDF to the right directory
         """
-        print('finish')
 
         if self.save_all:
             pdf_file = os.path.join(self.participant_folder, f"{self.name_pdf}.pdf")
@@ -1029,10 +1081,13 @@ class MainWindow(QMainWindow):
             thread_pdf.daemon = True
             thread_pdf.start()
 
+            if self.progression:
+                self.progression.set_progress(100)
+
             QMessageBox.information(self, "Success", f"Data saved in folder: {self.participant_folder}")
+            self.saved_data = True
 
     def set_progress(self, value: int):
-        print(f"Progress: {value}")
         self.progression.set_progress(value)
 
 
@@ -1059,12 +1114,12 @@ class ProgressionThread(QThread):
 
         active_tabs = self.count_active_tabs()
         if active_tabs == 0: active_tabs = 100
-        if self.checkboxes and len(self.checkboxes) == 0:
-            self.step_progress = 1 / active_tabs * 100
-        elif self.checkboxes:
-            self.step_progress = 1 / (active_tabs * len(self.checkboxes)) * 100
+        if self.checkboxes is not None and len(self.checkboxes) == 0:
+            self.step_progress = 100 / active_tabs
+        elif self.checkboxes is not None:
+            self.step_progress = 100 / (active_tabs * len(self.checkboxes))
         else:
-            self.step_progress = 1
+            self.step_progress = 100
 
         self.mutex = QMutex()
         self.condition = QWaitCondition()
@@ -1088,20 +1143,16 @@ class ProgressionThread(QThread):
                 self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
 
             range_index = list(range(self.num_trials)) if self.index == -1 else [self.index]
-            print(range_index, self.index)
             for i in range_index:
                 self.export_tab(i)
-                print(f'here {i}')
 
             if self.pdf:
                 self.pdf.add_page()
                 self.pdf.set_font("Arial", style="B", size=14)
                 self.pdf.cell(0, 10, f"Average over all trials with score 3", ln=True)
                 self.pdf.set_font("Arial", size=12)
-                print(f'here {self.num_trials + 1}')
 
                 self.average_events_info()
-                print(f'here {self.num_trials + 2}')
 
             self.finished_file.emit()
 
@@ -1114,6 +1165,8 @@ class ProgressionThread(QThread):
         tab = self.main.tab_widget.widget(index)
 
         if isinstance(tab, TrailTab):
+            NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+
             data = {
                 "Time (s)": tab.xs if tab.xs else [],
                 "Left Sensor x (cm)": [pos[0] for pos in tab.log_left] if tab.xs else [],
@@ -1134,13 +1187,11 @@ class ProgressionThread(QThread):
             max_length = max(len(v) for v in data.values())
             for key in data:
                 data[key].extend([None] * (max_length - len(data[key])))
-
             df = pd.DataFrame(data)
             trial_file = os.path.join(self.participant_folder, f"trial_{index + 1}.xlsx")
             if os.path.exists(trial_file):
                 os.remove(trial_file)
             df.to_excel(trial_file, index=False)
-
             if self.pdf:
                 self.pdf.set_font("Arial", style="B", size=14)
                 self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()}' if tab.xs else ''}", ln=True)

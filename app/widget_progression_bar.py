@@ -15,6 +15,7 @@ class ProgressionBar(QDialog):
         super().__init__(parent)
         file_directory = (os.path.dirname(os.path.abspath(__file__)))
         dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')
+        self.setWindowTitle('Progress')
         self.setWindowIcon(QIcon(dir_icon))
         self.setGeometry(550, 275, 350, 75)
 

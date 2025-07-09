@@ -1,12 +1,9 @@
 import random
-import time
 from math import sqrt
 
 import matplotlib.collections
 import pygame
 from enum import Enum
-import serial
-import serial.tools.list_ports
 import threading
 
 from PySide6.QtGui import QColor, QTextCursor
@@ -14,7 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget, QLabel, QHBoxLayout,
     QTextEdit, QMessageBox, QSizePolicy, QComboBox
 )
-from PySide6.QtCore import QTimer, QThread, Qt
+from PySide6.QtCore import QTimer, Qt
 
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
@@ -22,13 +19,13 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from data_processing import calculate_boxhand, calculate_e6, calculate_events, calculate_extra_parameters, \
     calculate_position_events, predict_score
-from sensor_G4Track import get_frame_data
 
 from scipy import signal
 
+from thread_reading import ReadThread
 from window_main_plot import MainWindow
-from constants import READ_SAMPLE, BEAUTY_SPEED, SERIAL_BUTTON, MAX_HEIGHT_NEEDED, SPEED_FILTER, SENSORS_USED, fs, \
-    NUMBER_EVENTS, COLORS_EVENT, LABEL_EVENT
+from widget_settings import manage_settings
+from constants import READ_SAMPLE, BEAUTY_SPEED, COLORS
 
 
 class TrialState(Enum):
@@ -40,11 +37,21 @@ class TrialState(Enum):
     completed = 2
 
 
+def colors_to_hex(colors):
+    hex_colors = []
+    for color in colors:
+        for (hex_c, name) in COLORS:
+            if name == color: hex_colors.append(hex_c)
+    return hex_colors
+
+
 class TrailTab(QWidget):
     """
     Needed to show the plot and all the information related to a trial
     """
     def __init__(self, trail_number, parent: MainWindow):
+        NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+
         super().__init__(parent)
         self.case_status = -1
         self.scatter = []
@@ -118,6 +125,7 @@ class TrailTab(QWidget):
 
         self.notes_label = QLabel("Notes:")
         self.notes_input = QTextEdit()
+        self.notes_input.textChanged.connect(self.signal_text_changed)
         self.notes_layout.addWidget(self.notes_label)
         self.notes_layout.addWidget(self.notes_input)
 
@@ -132,7 +140,17 @@ class TrailTab(QWidget):
         self.timer_plot.timeout.connect(self.update_plot)
         self.timer_plot.setInterval(20)
 
+    def signal_text_changed(self):
+        main_window = self.window()
+        if isinstance(main_window, MainWindow):
+            main_window.signal_text_changed()
+
     def setup_plot(self):
+        COLORS_EVENT = manage_settings.get("Events", "COLORS_EVENT")
+        colors_hex = colors_to_hex(COLORS_EVENT)
+        LABEL_EVENT = manage_settings.get("Events", "LABEL_EVENT")
+        NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+
         self.figure = Figure(constrained_layout=True)
         self.canvas = FigureCanvas(self.figure)
 
@@ -168,7 +186,7 @@ class TrailTab(QWidget):
 
         legend_elements = [None]*NUMBER_EVENTS
         for i in range(NUMBER_EVENTS):
-            legend_elements[i] = Line2D([0], [0], marker='o', color='w', markerfacecolor=COLORS_EVENT[i],
+            legend_elements[i] = Line2D([0], [0], marker='o', color='w', markerfacecolor=colors_hex[i],
                                         markersize=10, label=LABEL_EVENT[i])
 
         # Place legend below the plot
@@ -188,6 +206,10 @@ class TrailTab(QWidget):
                 if event.artist == point:
                     self.move_event = point
                     self.moving_event_index = i
+
+                    main_window = self.window()
+                    if isinstance(main_window, MainWindow):
+                        main_window.saved_data = False
                     break
             return
 
@@ -205,6 +227,9 @@ class TrailTab(QWidget):
                 if ret == QMessageBox.Yes:
                     self.new_starting_point(ind, x)
                     self.change_starting_point = False
+                    main_window = self.window()
+                    if isinstance(main_window, MainWindow):
+                        main_window.saved_data = False
 
             if self.change_end_point:
                 ret = QMessageBox.warning(self, "Warning",
@@ -213,6 +238,9 @@ class TrailTab(QWidget):
                 if ret == QMessageBox.Yes:
                     self.new_end_point(ind, x)
                     self.change_end_point = False
+                    main_window = self.window()
+                    if isinstance(main_window, MainWindow):
+                        main_window.saved_data = False
 
             self.window().statusBar().showMessage(f"Coordinates: x = {round(x, 2)} & y = {round(y, 2)}", 2000)
 
@@ -221,6 +249,7 @@ class TrailTab(QWidget):
         Needed for the markings on the data of the plot
         :param event: not the same as the events from the scatter, python-event
         """
+        fs = manage_settings.get("Sensors", "fs")
         if event.inaxes != self.ax:
             self.mouse_marker.set_visible(False)
             self.canvas.draw_idle()
@@ -264,6 +293,7 @@ class TrailTab(QWidget):
         Change the scatter-events from position when released
         :param event: not the same as the events from the scatter, python-event
         """
+        fs = manage_settings.get("Sensors", "fs")
         if not self.change_events or self.move_event is None:
             return
 
@@ -292,8 +322,6 @@ class TrailTab(QWidget):
             return
 
         self.window().setEnabled(False)
-        print(len(self.xs), len(self.log_left), len(self.log_right))
-        print(type(self.pos_left))
 
         temp = self.xs
         self.xs = [time-temp[ind] for time in self.xs[ind:]]
@@ -301,23 +329,20 @@ class TrailTab(QWidget):
         temp = self.log_left
         self.log_left = [temp[i] for i in range(ind, len(self.log_left))]
 
-        print(self.log_left[0])
-
         temp = self.log_right
         self.log_right = [temp[i] for i in range(ind, len(self.log_right))]
-        print(len(self.xs), len(self.log_left), len(self.log_right))
 
         if self.event_log[-1] != 0:
             try:
                 self.first_event_guess = True
                 self.calculate_events(False, True)
             except:
+                NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
                 self.event_log = [0] * NUMBER_EVENTS
                 self.event_old_log = [0] * NUMBER_EVENTS
                 self.event_position = [None] * NUMBER_EVENTS
 
-                print(type(self.scatter))
                 if self.scatter:
                     for point in self.scatter:
                         point.remove()
@@ -331,32 +356,26 @@ class TrailTab(QWidget):
             return
 
         self.window().setEnabled(False)
-        print(len(self.xs), len(self.log_left), len(self.log_right))
-        print(type(self.pos_left))
 
-        temp = self.xs
         self.xs = [time for time in self.xs[:ind]]
 
         temp = self.log_left
         self.log_left = [temp[i] for i in range(0, ind)]
 
-        print(self.log_left[0])
-
         temp = self.log_right
         self.log_right = [temp[i] for i in range(0, ind)]
-        print(len(self.xs), len(self.log_left), len(self.log_right))
 
         if self.event_log[-1] != 0:
             try:
                 self.first_event_guess = True
                 self.calculate_events(False, True)
             except:
+                NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
                 self.event_log = [0] * NUMBER_EVENTS
                 self.event_old_log = [0] * NUMBER_EVENTS
                 self.event_position = [None] * NUMBER_EVENTS
 
-                print(type(self.scatter))
                 if self.scatter:
                     for point in self.scatter:
                         point.remove()
@@ -367,10 +386,9 @@ class TrailTab(QWidget):
 
     def start_reading(self):
         if self.trial_state == TrialState.not_started:
+            self.timer_plot.start()
             self.reading_active = True
             self.trial_state = TrialState.running
-            self.data_thread.start()
-            self.timer_plot.start()
             main_window = self.window()
             if isinstance(main_window, MainWindow):
                 main_window.update_toolbar()
@@ -378,7 +396,6 @@ class TrailTab(QWidget):
     def stop_reading(self):
         if self.trial_state == TrialState.running:
             self.reading_active = False
-            self.data_thread.stop()
             self.timer_plot.stop()
             self.trial_state = TrialState.completed
             main_window = self.window()
@@ -390,6 +407,8 @@ class TrailTab(QWidget):
 
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
+            NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+
             if self.vt:
                 self.ax.set_ylim(0, 3)
             else:
@@ -486,6 +505,7 @@ class TrailTab(QWidget):
         """
         Implement the Butterworth filter on the speed
         """
+        SPEED_FILTER = manage_settings.get("Data-processing", "SPEED_FILTER")
         if SPEED_FILTER:
             output_left_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_left])
             output_right_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_right])
@@ -525,6 +545,11 @@ class TrailTab(QWidget):
                 main_window = self.window()
 
             if isinstance(main_window, MainWindow):
+                COLORS_EVENT = manage_settings.get("Events", "COLORS_EVENT")
+                colors_hex = colors_to_hex(COLORS_EVENT)
+                LABEL_EVENT = manage_settings.get("Events", "LABEL_EVENT")
+                NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+
                 if self.xt:
                     self.ax.set_title(f'Trial {self.trial_number + 1} - x-coordinates')
                     self.ax.set_ylabel('X-coordinates (cm)')
@@ -583,12 +608,20 @@ class TrailTab(QWidget):
                     self.ax.set_ylim(min_y, max_y)
 
                 if self.scatter is not None:
-                    print(type(self.scatter))
                     if self.scatter:
                         for i in range(len(self.scatter)):
                             self.scatter[i].remove()
                         self.scatter = []
                     if len(self.xs) > 0: self.draw_events()
+
+                legend_elements = [None] * NUMBER_EVENTS
+                for i in range(NUMBER_EVENTS):
+                    legend_elements[i] = Line2D([0], [0], marker='o', color='w', markerfacecolor=colors_hex[i],
+                                                markersize=10, label=LABEL_EVENT[i])
+
+                # Place legend below the plot
+                self.ax.legend(handles=legend_elements, loc='upper center',
+                               bbox_to_anchor=(0.5, -0.12), ncol=6)
 
                 self.canvas.draw()
 
@@ -600,6 +633,7 @@ class TrailTab(QWidget):
 
     def calculate_events(self, got_folder=False, go=False):
         if go or (self.event_log[-1] == 0 and (self.button_pressed or READ_SAMPLE or got_folder)):
+            NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
             if go: self.remove_added_text()
 
             predict_score(self.log_left, self.log_right)
@@ -607,13 +641,10 @@ class TrailTab(QWidget):
             self.event_log[-1] = calculate_e6(self.xs)
 
             self.case_status = calculate_boxhand(self.log_left, self.log_right)
-            print('done case')
             if self.first_event_guess:
-                print(self.original_data_file)
                 if (self.button_pressed or self.original_data_file) and not \
                         (self.original_data_file and self.get_score() == 0):
                     self.score.setCurrentIndex(self.get_estimated_score())
-                    print('done')
 
                 self.first_event_guess = False
 
@@ -637,8 +668,6 @@ class TrailTab(QWidget):
                     e1, e2, e3, e4, e5
 
             self.event_position = calculate_position_events(self.case_status)
-
-            print(self.event_position)
 
             if self.get_score() == 3:
                 if self.case_status == 0:
@@ -679,7 +708,10 @@ class TrailTab(QWidget):
         return text_events_notes
 
     def draw_events(self):
-        print(self.event_log)
+        COLORS_EVENT = manage_settings.get("Events", "COLORS_EVENT")
+        colors_hex = colors_to_hex(COLORS_EVENT)
+        LABEL_EVENT = manage_settings.get("Events", "LABEL_EVENT")
+        NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
 
         x_positions = [self.xs[ei] for ei in self.event_log]
 
@@ -689,9 +721,11 @@ class TrailTab(QWidget):
         self.scatter = []
         for i in range(NUMBER_EVENTS):
             self.scatter.append(self.ax.scatter(x_positions[i], y_positions[i],
-                                    c=COLORS_EVENT[i], label=LABEL_EVENT[i], s=32, zorder=15-i, picker=True))
+                                    c=colors_hex[i], label=LABEL_EVENT[i], s=32, zorder=15-i, picker=True))
 
     def speed_calculation(self, vector, time_val, index, left):
+        fs = manage_settings.get("Sensors", "fs")
+
         if len(self.xs) <= 1 or len(self.log_right) <= 1 or len(self.log_left) <= 1:
             return 0
 
@@ -733,119 +767,3 @@ class TrailTab(QWidget):
 
     def stop_music(self):
         pygame.mixer.stop()
-
-
-class ReadThread(QThread):
-    """
-    Thread to read the data when plotting the data --> possible to get 120 Hz without letting the program wait
-    """
-    def __init__(self, parent):
-        super().__init__(parent)
-
-        self.start_time = None
-
-    def run(self):
-        self.stop_read = False
-        if not self.start_time:
-            self.start_time = time.time()
-
-        while not self.stop_read:
-            try:
-                self.read_sensor_data()
-            except Exception as e:
-                print(f"Error in read_sensor_data: {e}")
-                time.sleep(0.5)
-
-            time.sleep(1/fs)
-
-    def stop(self):
-        self.stop_read = True
-        self.start_time = None
-
-    def read_sensor_data(self):
-        """
-        Read the sensor data (and also some test cases) & adds it to the log
-        """
-        tab = self.parent()
-        if tab and isinstance(tab, TrailTab):
-            elapsed_time = time.time() - self.start_time
-
-            main_window = tab.window()
-            if (isinstance(main_window, MainWindow)) and SERIAL_BUTTON and (
-                    main_window.button_trigger is not None):
-                try:
-                    line = '1'
-                    while main_window.button_trigger.in_waiting > 0:
-                        line = main_window.button_trigger.readline().decode('utf-8').rstrip()
-
-                    # print(f"Received from Arduino: {line}")
-                    if line == '0':
-                        self.stop()
-                        tab.button_pressed = True
-                except serial.SerialException as e:
-                    print(f"Failed to connect to COM3: {e}")
-
-            if not READ_SAMPLE:
-                main_window = tab.window()
-
-                if isinstance(main_window, MainWindow):
-                    if not main_window.is_connected:
-                        tab.xs.append(len(tab.xs) / fs)
-                        tab.log_left.append((0, 0, 0, 0))
-                        tab.log_right.append((0, 0, 0, 0))
-
-                frame_data, active_count, data_hubs = get_frame_data(main_window.dongle_id,
-                                                                     [main_window.hub_id])
-
-                if (active_count, data_hubs) == (1, 1):
-                    time_now = len(tab.xs) / fs
-                    pos1 = tuple(frame_data.G4_sensor_per_hub[main_window.lindex].pos)
-                    pos1 = tuple([pos1[i] if i != 2 else -pos1[i] for i in range(3)])
-                    pos1 += (tab.speed_calculation(pos1, time_now, len(tab.xs) - 1, True),)
-
-                    pos2 = tuple(frame_data.G4_sensor_per_hub[main_window.rindex].pos)
-                    pos2 = tuple([pos2[i] if i != 2 else -pos2[i] for i in range(3)])
-                    pos2 += (tab.speed_calculation(pos2, time_now, len(tab.xs) - 1, False),)
-
-                    tab.xs.append(len(tab.xs) / fs)
-                    tab.log_left.append(pos1)
-                    tab.log_right.append(pos2)
-
-            elif BEAUTY_SPEED:
-                elapsed_time = len(tab.xs) / fs
-                tab.xs.append(elapsed_time)
-
-                if elapsed_time < 5:
-                    pos1 = (0, 0, -elapsed_time,)
-                    pos2 = (0, elapsed_time, 0,)
-
-                elif elapsed_time < 10:
-                    pos1 = (0, 0, 5 - (elapsed_time - 5),)
-                    pos2 = (0, 5 - (elapsed_time - 5), 0,)
-
-                elif elapsed_time < 15:
-                    pos1 = (0, 0, 5 * (elapsed_time - 10),)
-                    pos2 = (0, 5 * (elapsed_time - 10), 0,)
-
-                elif elapsed_time < 20:
-                    pos1 = (0, 0, 25 - 5 * (elapsed_time - 15),)
-                    pos2 = (0, 25 - 5 * (elapsed_time - 15), 0,)
-
-                else:
-                    pos1 = (0, 0, 0,)
-                    pos2 = (0, 0, 0,)
-
-                tab.log_left.append(
-                    pos1 + (tab.speed_calculation(pos1, tab.xs[-1], len(tab.xs) - 1, True),))
-                tab.log_right.append(
-                    pos2 + (tab.speed_calculation(pos2, tab.xs[-1], len(tab.xs) - 1, False),))
-
-            else:
-                pos1 = (random.randint(-20, 20), random.randint(0, 20), random.randint(-20, 0))
-                pos2 = (random.randint(-20, 20), random.randint(0, 20), random.randint(-20, 0))
-
-                tab.xs.append(elapsed_time)
-                tab.log_left.append(
-                    pos1 + (tab.speed_calculation(pos1, tab.xs[-1], len(tab.xs) - 1, True),))
-                tab.log_right.append(
-                    pos2 + (tab.speed_calculation(pos2, tab.xs[-1], len(tab.xs) - 1, False),))

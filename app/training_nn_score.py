@@ -16,9 +16,6 @@ def extract_excel_for_nn(file):
     """
     trial_data = pd.read_excel(file)
 
-    xs = trial_data.iloc[:, 0].values
-    coor = None
-    score = -1
     if trial_data.shape[0] < 1 or trial_data.shape[1] < 10:
         return None, -1
 
@@ -69,7 +66,7 @@ def main():
     print('Start training')
 
     model = Sequential([
-        Masking(mask_value=0.0, input_shape=(max(length_x), 8)),
+        Masking(mask_value=0.0, input_shape=(None, 8)),
         LSTM(64, return_sequences=False),
         Dropout(0.2),
         Dense(32, activation='relu'),
