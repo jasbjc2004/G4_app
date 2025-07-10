@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 
 import pandas as pd
@@ -29,6 +30,11 @@ from thread_reading import ReadThread
 from widget_settings import manage_settings
 from constants import READ_SAMPLE
 
+logging.basicConfig(
+    filename='logboek.txt',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 class MainWindow(QMainWindow):
     def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False, save=None):
@@ -1064,6 +1070,7 @@ class MainWindow(QMainWindow):
             self.pdf.image(buf, x=None, y=None, w=100)
             self.pdf.ln(5)
         except Exception as e:
+            logging.error(e, exc_info=True)
             print(str(e))
         finally:
             buf.close()
@@ -1079,6 +1086,7 @@ class MainWindow(QMainWindow):
         self.progression.show()
 
     def show_error(self, e):
+        logging.error(e, exc_info=True)
         QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
 
     def finish_export(self):

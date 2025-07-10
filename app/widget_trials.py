@@ -1,3 +1,4 @@
+import logging
 import random
 from math import sqrt
 
@@ -25,7 +26,13 @@ from scipy import signal
 from thread_reading import ReadThread
 from window_main_plot import MainWindow
 from widget_settings import manage_settings
-from constants import READ_SAMPLE, BEAUTY_SPEED, COLORS
+from constants import READ_SAMPLE, COLORS
+
+logging.basicConfig(
+    filename='logboek.txt',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 
 class TrialState(Enum):
@@ -336,7 +343,8 @@ class TrailTab(QWidget):
             try:
                 self.first_event_guess = True
                 self.calculate_events(False, True)
-            except:
+            except Exception as e:
+                logging.error(e, exc_info=True)
                 NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
                 self.event_log = [0] * NUMBER_EVENTS
@@ -369,7 +377,8 @@ class TrailTab(QWidget):
             try:
                 self.first_event_guess = True
                 self.calculate_events(False, True)
-            except:
+            except Exception as e:
+                logging.error(e, exc_info=True)
                 NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
                 self.event_log = [0] * NUMBER_EVENTS

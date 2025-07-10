@@ -1,3 +1,4 @@
+import logging
 import random
 import time
 
@@ -11,6 +12,11 @@ from widget_settings import manage_settings
 fs = manage_settings.get("Sensors", "fs")
 SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
 
+logging.basicConfig(
+    filename='logboek.txt',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 class ReadThread(QThread):
     """
@@ -38,11 +44,15 @@ class ReadThread(QThread):
 
         while not self.stop_read:
             try:
-                if self.tab and not self.start_time:
+                if self.tab is not None and not self.start_time:
                     self.start_time = time.time()
 
-                self.read_sensor_data()
+                if self.tab is not None:
+                    self.read_sensor_data()
+                else:
+                    self.keep_sensor_alive()
             except Exception as e:
+                logging.error(e, exc_info=True)
                 print(f"Error in read_sensor_data: {e}")
                 time.sleep(0.5)
 
@@ -52,6 +62,16 @@ class ReadThread(QThread):
         self.stop_read = True
         self.start_time = None
 
+    def keep_sensor_alive(self):
+        """
+        Needed to lower the delay when starting a reading
+        """
+        main_window = self.parent()
+
+        if not READ_SAMPLE:
+            get_frame_data(main_window.dongle_id, [main_window.hub_id])
+            print('here')
+
     def read_sensor_data(self):
         """
         Read the sensor data (and also some test cases) & adds it to the log
@@ -59,10 +79,17 @@ class ReadThread(QThread):
         from window_main_plot import MainWindow
         from widget_trials import TrailTab
 
-        main_window = self.parent()
-        if self.tab and main_window and isinstance(self.tab, TrailTab) and isinstance(main_window, MainWindow):
-            elapsed_time = time.time() - self.start_time
+        if self.tab is None:
+            print("Warning: read_sensor_data called with None tab")
+            return
 
+        main_window = self.parent()
+        if not (self.tab and main_window and isinstance(self.tab, TrailTab) and isinstance(main_window, MainWindow)):
+            return
+
+        elapsed_time = time.time() - self.start_time
+
+        try:
             if SERIAL_BUTTON and main_window.button_trigger is not None:
                 try:
                     line = '1'
@@ -70,7 +97,6 @@ class ReadThread(QThread):
                         line = main_window.button_trigger.readline().decode('utf-8').rstrip()
 
                     if line == '0':
-                        self.stop_current_reading()
                         self.tab.button_pressed = True
                 except serial.SerialException as e:
                     print(f"Failed to connect to COM3: {e}")
@@ -137,5 +163,8 @@ class ReadThread(QThread):
                     pos1 + (self.tab.speed_calculation(pos1, self.tab.xs[-1], len(self.tab.xs) - 1, True),))
                 self.tab.log_right.append(
                     pos2 + (self.tab.speed_calculation(pos2, self.tab.xs[-1], len(self.tab.xs) - 1, False),))
-        else:
-            if not READ_SAMPLE: get_frame_data(main_window.dongle_id, [main_window.hub_id])
+
+            if self.tab and self.tab.button_pressed:
+                self.stop_current_reading()
+        except:
+            return

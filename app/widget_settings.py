@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 from PySide6.QtCore import Qt, QRegularExpression
@@ -9,6 +10,12 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLa
     QGraphicsOpacityEffect
 
 from constants import COLORS
+
+logging.basicConfig(
+    filename='logboek.txt',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 
 class SettingsManager:
@@ -73,6 +80,7 @@ class SettingsManager:
             print(f"Settings saved to {self.config_file}")
             return True
         except Exception as e:
+            logging.error(e, exc_info=True)
             print(f"Error saving settings: {e}")
             return False
 
@@ -288,6 +296,7 @@ class Settings(QDialog):
         elif changes_made:
             if manage_settings.save_settings():
                 self.parent().update_plot()
+                self.parent().update_toolbar()
                 QMessageBox.information(self, "Success", "Settings saved successfully!")
             else:
                 QMessageBox.warning(self, "Error", "Failed to save settings!")
@@ -327,6 +336,7 @@ class Settings(QDialog):
                     widget.setStyleSheet("")
 
         self.parent().update_plot()
+        self.parent().update_toolbar()
 
 
 class IntPointlessValidator(QValidator):

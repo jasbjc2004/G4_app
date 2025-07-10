@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 from scipy.signal import argrelextrema
 
@@ -10,6 +12,12 @@ from tensorflow import keras
 """
 All functions needed for the data processing and calibration
 """
+
+logging.basicConfig(
+    filename='logboek.txt',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
 
@@ -98,12 +106,13 @@ def predict_score(pos_left, pos_right):
     try:
         prediction = model.predict(hands) * 2.0 + 1
     except Exception as error:
-        prediction = -1
+        prediction = 0
         print(error)
+        logging.error(error, exc_info=True)
 
-    print(prediction)
+    print(prediction[0][0])
     print(round(prediction[0][0]))
-    return round(prediction[0][0])
+    return round(prediction[0][0]) if prediction[0][0] < 2.46 else 3
 
 
 def calculate_boxhand(pos_left, pos_right, score=-1):
@@ -153,7 +162,30 @@ def calculate_boxhand(pos_left, pos_right, score=-1):
             else:
                 return 3
         case 1:
-            if mse_left >= mse_right:
+            counter_left = 0
+            counter_right = 0
+            start_left = pos_left[0]
+            start_right = pos_right[0]
+
+            range_list = range(-1, -len(pos_left), -1) if len(pos_left) < 50 else range(-1, -50, -1)
+
+            for i in range_list:
+                if pos_left[i][2] < MAX_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] < MAX_LENGTH_NEEDED + \
+                        start_left[1]:
+                    counter_left -= 1
+                if pos_right[i][2] < MAX_HEIGHT_NEEDED + start_right[2] and \
+                        pos_right[i][1] < MAX_LENGTH_NEEDED + start_right[1]:
+                    counter_right -= 1
+
+                if pos_left[i][2] > MIN_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] > MIN_LENGTH_NEEDED + \
+                        start_left[1]:
+                    counter_left += 1 * len(pos_left) / 6
+                if pos_right[i][2] > MIN_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] > MIN_LENGTH_NEEDED + \
+                        start_right[
+                            1]:
+                    counter_right += 1 * len(pos_left) / 6
+
+            if counter_right < counter_left:
                 return 5
             else:
                 return 4
@@ -286,7 +318,8 @@ def calculate_events(pos_left, pos_right, case, score):
             e5 = e4
 
         return e1, e2, e3, e4, e5
-    except:
+    except Exception as error:
+        logging.error(error, exc_info=True)
         return 0, 0, 0, 0, 0
 
 
