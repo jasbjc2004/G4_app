@@ -22,7 +22,7 @@ from matplotlib.lines import Line2D
 
 from sensor_G4Track import initialize_system, set_units, get_active_hubs, close_sensor
 from data_processing import calibration_to_center, calculate_boxhand, calculate_position_events, \
-    calculate_extra_parameters
+    calculate_extra_parameters, predict_score
 
 from scipy import signal
 
@@ -35,6 +35,7 @@ logging.basicConfig(
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
 
 class MainWindow(QMainWindow):
     def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False, save=None):
@@ -77,6 +78,7 @@ class MainWindow(QMainWindow):
         self.thread = None
         self.worker = None
         self.data_thread = ReadThread(self)
+        self.data_thread.lost_connection.connect(self.data_loss)
 
         self.sound = sound
         self.participant_folder = None
@@ -98,6 +100,10 @@ class MainWindow(QMainWindow):
         self.save_all = False
 
         self.saved_data = True
+
+    def data_loss(self):
+        self.stop_current_reading()
+        QMessageBox.critical(self, "Error", "Sensor is down, please check the connections")
 
     def setup(self, num_trials):
         from widget_trials import TrailTab
@@ -394,70 +400,86 @@ class MainWindow(QMainWindow):
 
         tab = self.tab_widget.widget(int(trial_number) - 1)
 
+        if trial_data.shape[1] < 1:
+            tab.event_log = [0] * NUMBER_EVENTS
+            return
+
+        first_col = trial_data.iloc[:, 0]
+
+        if first_col.isnull().all() or first_col.astype(str).str.strip().eq("").all():
+            return
+
         xs = trial_data.iloc[:, 0].values
-        if isinstance(tab, TrailTab) and len(xs) > 1:
-            tab.trial_state = TrialState.completed
+        if not (isinstance(tab, TrailTab) and len(xs) > 2):
+            tab.event_log = [0] * NUMBER_EVENTS
+            return
+        tab.trial_state = TrialState.completed
 
-            self.update_toolbar()
+        self.update_toolbar()
 
-            tab.xs.clear()
-            tab.log_left.clear()
-            tab.log_right.clear()
+        tab.xs.clear()
+        tab.log_left.clear()
+        tab.log_right.clear()
 
-            tab.xs = list(xs)
-            x1 = trial_data.iloc[:, 1].values
-            y1 = trial_data.iloc[:, 2].values
-            if not self.neg_z:
-                z1 = trial_data.iloc[:, 3].values
+        tab.xs = list(xs)
+        x1 = trial_data.iloc[:, 1].values
+        y1 = trial_data.iloc[:, 2].values
+        if not self.neg_z:
+            z1 = trial_data.iloc[:, 3].values
+        else:
+            z1 = -trial_data.iloc[:, 3].values
+        v1 = trial_data.iloc[:, 4].values
+
+        x2 = trial_data.iloc[:, 5].values
+        y2 = trial_data.iloc[:, 6].values
+        if not self.neg_z:
+            z2 = trial_data.iloc[:, 7].values
+        else:
+            z2 = -trial_data.iloc[:, 7].values
+        v2 = trial_data.iloc[:, 8].values
+
+        for i in range(len(x1)):
+            tab.log_left.append((x1[i], y1[i], z1[i], v1[i],))
+            tab.log_right.append((x2[i], y2[i], z2[i], v2[i],))
+
+        try:
+            if trial_data.shape[1] <= 8:
+                tab.original_data_file = False
             else:
-                z1 = -trial_data.iloc[:, 3].values
-            v1 = trial_data.iloc[:, 4].values
+                tab.original_data_file = True
 
-            x2 = trial_data.iloc[:, 5].values
-            y2 = trial_data.iloc[:, 6].values
-            if not self.neg_z:
-                z2 = trial_data.iloc[:, 7].values
-            else:
-                z2 = -trial_data.iloc[:, 7].values
-            v2 = trial_data.iloc[:, 8].values
-
-            for i in range(len(x1)):
-                tab.log_left.append((x1[i], y1[i], z1[i], v1[i],))
-                tab.log_right.append((x2[i], y2[i], z2[i], v2[i],))
-
-            try:
-                if trial_data.shape[1] <= 8:
-                    tab.original_data_file = False
-                else:
-                    tab.original_data_file = True
-
-                # add manual sign
-                if trial_data.shape[1] < 11:
-                    tab.event_log = [0]*NUMBER_EVENTS
-                elif self.manual_events:
-                    tab.event_log = trial_data.iloc[:, 12].values[0:NUMBER_EVENTS].tolist()
-                    if all(x == 0 for x in tab.event_log):
-                        tab.event_log = trial_data.iloc[:, 11].values[0:NUMBER_EVENTS].tolist()
-                else:
+            # add manual sign
+            if trial_data.shape[1] < 11:
+                tab.event_log = [0]*NUMBER_EVENTS
+            elif self.manual_events:
+                tab.event_log = trial_data.iloc[:, 12].values[0:NUMBER_EVENTS].tolist()
+                if all(x == 0 for x in tab.event_log):
                     tab.event_log = trial_data.iloc[:, 11].values[0:NUMBER_EVENTS].tolist()
+            else:
+                tab.event_log = trial_data.iloc[:, 11].values[0:NUMBER_EVENTS].tolist()
 
-                self.events_present = not all(x == 0 for x in tab.event_log)
-                if self.events_present:
-                    tab.first_process = False
+            self.events_present = not all(x == 0 for x in tab.event_log)
+            if self.events_present:
+                tab.first_process = False
 
-                if trial_data.shape[1] < 13 or not self.manual_events:
-                    tab.case_status = calculate_boxhand(tab.log_left, tab.log_right)
-                    tab.event_position = calculate_position_events(tab.case_status)
-                    # tab.score.setCurrentIndex(tab.get_estimated_score())
+            if trial_data.shape[1] < 13 or not self.manual_events:
+                USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
+
+                if USE_NEURAL_NET:
+                    score = predict_score(tab.pos_left, tab.pos_right)
                 else:
-                    tab.event_position = trial_data.iloc[:, 13].values[0:NUMBER_EVENTS].tolist()
-            finally:
-                if tab.event_log is None or len(tab.event_log) == 0:
-                    tab.event_log = [0] * NUMBER_EVENTS
-                else:
-                    tab.event_log = [int(x) if x != 0 else 0 for x in tab.event_log]
+                    score = -1
+                tab.case_status = calculate_boxhand(tab.log_left, tab.log_right, score)
+                tab.event_position = calculate_position_events(tab.case_status)
+            else:
+                tab.event_position = trial_data.iloc[:, 13].values[0:NUMBER_EVENTS].tolist()
+        finally:
+            if tab.event_log is None or len(tab.event_log) == 0:
+                tab.event_log = [0] * NUMBER_EVENTS
+            else:
+                tab.event_log = [int(x) if x != 0 else 0 for x in tab.event_log]
 
-            tab.update_plot(True, self)
+        tab.update_plot(True, self)
 
     def add_notes(self, file):
         """
@@ -1199,12 +1221,12 @@ class ProgressionThread(QThread):
                 "Right Sensor y (cm)": [pos[1] for pos in tab.log_right] if tab.xs else [],
                 "Right Sensor z (cm)": [pos[2] for pos in tab.log_right] if tab.xs else [],
                 "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right] if tab.xs else [],
-                "Score:": [tab.get_score()],
+                "Score:": [tab.get_score()] if tab.xs else [],
                 " ": [],
                 "Automatic events:": [tab.event_log[i] if tab.event_old_log[i] == 0 else tab.event_old_log[i] for i in
-                                      range(NUMBER_EVENTS)],
-                "Manual events:": [0] * NUMBER_EVENTS if all(e == 0 for e in tab.event_old_log) else tab.event_log,
-                "Position events:": tab.event_position
+                                      range(NUMBER_EVENTS)] if tab.xs else [],
+                "Manual events:": ([0] * NUMBER_EVENTS if all(e == 0 for e in tab.event_old_log) else tab.event_log) if tab.xs else [],
+                "Position events:": tab.event_position if tab.xs else []
             }
             max_length = max(len(v) for v in data.values())
             for key in data:

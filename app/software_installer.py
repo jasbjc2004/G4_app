@@ -73,6 +73,9 @@ def main():
                 print(f"Error: failed to get info from: {file_path}!")
                 continue
 
+        elif filename.endswith('.keras'):
+            extra_files.append(file_path.replace(current_dir, '.').replace('\\', '/'))
+
     needed_files = os.path.join(current_dir, 'NEEDED', 'FILES')
     for filename in os.listdir(needed_files):
         file_path = os.path.join(needed_files, filename)

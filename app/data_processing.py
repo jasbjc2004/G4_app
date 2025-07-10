@@ -376,31 +376,30 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     # we berekenen 4 bimanuele parameters en 10 unimanuele parameters
 
     # total time = trigger press - start first movement
-    # e5 kan hier gelijk zijn aan e5 dus zoek dat uit
     tt = (e6 - min(e1, e4)) / fs
 
     # temp coupling = start trigger hand - start second phase of box opening hand ??
-    temp_coupling = (e4 - e2) / fs
+    temp_coupling = ((e4 - e2) / fs)/tt
 
     # movement overlap = end lid opening - start trigger hand
-    mov_overlap = ((e3 - e4) / fs)
+    mov_overlap = ((e3 - e4) / fs)/tt
 
     # goal synchronization = trigger press - end lid opening
-    goal_sync = (e6 - e3) / fs
+    goal_sync = ((e6 - e3) / fs)/tt
 
     # unimanuele parameters
     # time box hand = end lid opening - start box hand
-    t_bh = (e3 - e1) / fs
+    t_bh = ((e3 - e1) / fs)/tt
 
     # time 1st phase of box hand = start opening box - start of box hand
-    t_bh_p1 = (e2 - e1) / fs
+    t_bh_p1 = ((e2 - e1) / fs)/tt
 
     # time 2nd phase of box hand = end of box hand - start opening box
-    t_bh_p2 = (e3 - e2) / fs
+    t_bh_p2 = ((e3 - e2) / fs)/tt
 
     # time trigger hand = trigger press - start trigger hand
     # rekening houden met e4 en e5
-    t_th = (e6 - e4) / fs
+    t_th = ((e6 - e4) / fs)/tt
 
     # if start / endpoint is also a max => not taken into account. if need => first local max of b then sum in range e1: e3
     subset = bv[e1:e3]

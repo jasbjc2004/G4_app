@@ -3,7 +3,7 @@ import random
 import time
 
 import serial
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, Signal
 
 from sensor_G4Track import get_frame_data
 from constants import READ_SAMPLE, BEAUTY_SPEED
@@ -18,26 +18,32 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
+
 class ReadThread(QThread):
     """
     Thread to read the data when plotting the data --> possible to get 120 Hz without letting the program wait
     """
+    lost_connection = Signal()
+
     def __init__(self, parent):
         super().__init__(parent)
 
         self.start_time = None
         self.stop_read = False
         self.tab = None
+        self.sensor_died = 10
 
     def start_tab_reading(self, tab):
         self.tab = tab
         global fs, SERIAL_BUTTON
         fs = manage_settings.get("Sensors", "fs")
         SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
+        self.sensor_died = 10
 
     def stop_current_reading(self):
         self.tab = None
         self.start_time = None
+        self.sensor_died = 10
 
     def run(self):
         self.stop_read = False
@@ -166,5 +172,9 @@ class ReadThread(QThread):
 
             if self.tab and self.tab.button_pressed:
                 self.stop_current_reading()
+
+            if self.tab and self.tab.log_left[3] == 0:
+                print('here')
+                self.lost_connection.emit()
         except:
             return
