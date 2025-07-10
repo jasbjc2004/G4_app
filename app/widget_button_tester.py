@@ -5,7 +5,7 @@ import serial.tools.list_ports
 from PySide6.QtGui import QIcon
 
 from PySide6.QtWidgets import (
-    QVBoxLayout, QLabel, QDialog, QPushButton, QSizePolicy
+    QVBoxLayout, QLabel, QDialog, QPushButton, QSizePolicy, QMessageBox
 )
 from PySide6.QtCore import Qt, QTimer
 
@@ -20,7 +20,7 @@ class ButtonTester(QDialog):
         file_directory = (os.path.dirname(os.path.abspath(__file__)))
         dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')
         self.setWindowIcon(QIcon(dir_icon))
-        self.setGeometry(200, 200, 400, 400)
+        self.setGeometry(550, 275, 400, 400)
 
         self.main_window = parent
 
@@ -33,7 +33,8 @@ class ButtonTester(QDialog):
 
         text_label = QLabel()
         text_label.setText(
-            "This window helps you to connect the button and check if the button works.")
+            "This window helps you to connect the button and check if the button works. \n If the screen doesn't turn "
+            "yellow when pressing the button, please check the connection from the button to the micro-processor")
         text_label.setWordWrap(True)
         text_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
 
@@ -52,12 +53,12 @@ class ButtonTester(QDialog):
 
         self.timer = QTimer(self)
 
-        self.connect_button()
+        self.setLayout(layout)
 
         self.timer.timeout.connect(self.read_button)
         self.timer.setInterval(20)
 
-        self.setLayout(layout)
+        QTimer.singleShot(0, self.connect_button)
 
     def connect_button(self):
         """
@@ -96,6 +97,10 @@ class ButtonTester(QDialog):
 
                 except serial.SerialException as e:
                     print(f"Failed to connect to {port}: {e}")
+
+        if not found_port:
+            QMessageBox.critical(self, "Warning", "No button found! "
+                                                  "If this keeps happening, unplug the USB and try again")
 
     def read_button(self):
         """

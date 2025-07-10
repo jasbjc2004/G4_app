@@ -73,6 +73,8 @@ def calibration_to_center(sys_id):
         pos_right = list(pos0.G4_sensor_per_hub[rsen].pos)
 
         print(abs(abs(pos_left[0]) - pos_right[0]))
+        if abs(abs(pos_left[0]) - pos_right[0]) == 0:
+            return 0, 0, 0, False
 
         print(f"sensor: {pos_left, pos_right}")
 
@@ -94,7 +96,7 @@ def predict_score(pos_left, pos_right):
     print(hands.shape)
 
     try:
-        prediction = model.predict(hands) * 3.0
+        prediction = model.predict(hands) * 2.0 + 1
     except Exception as error:
         prediction = -1
         print(error)
@@ -104,11 +106,12 @@ def predict_score(pos_left, pos_right):
     return round(prediction[0][0])
 
 
-def calculate_boxhand(pos_left, pos_right):
+def calculate_boxhand(pos_left, pos_right, score=-1):
     """
     Calculate the case of the movement
     :param pos_left: list of coordinates of the left hand
     :param pos_right: list of coordinates of the right hand
+    :param score: Score according to neural net
     :returns:
         0 if the left hand is the box hand,
         1 if the right hand is the box hand
@@ -128,42 +131,6 @@ def calculate_boxhand(pos_left, pos_right):
     HEIGHT_BOX = manage_settings.get("Data-processing", "HEIGHT_BOX")
     THRESHOLD_CHANGED_HANDS_MEAS = manage_settings.get("Data-processing", "THRESHOLD_CHANGED_HANDS_MEAS")
 
-    start_left = pos_left[0]
-    start_right = pos_right[0]
-
-    counter_left = 7 * len(pos_left) / 8
-    counter_right = 7 * len(pos_right) / 8
-    for i in range(-1, -len(pos_left), -1):
-        if pos_left[i][2] < MAX_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] < MAX_LENGTH_NEEDED + start_left[1]:
-            counter_left -= 1
-        if pos_right[i][2] < MAX_HEIGHT_NEEDED + start_right[2] and \
-                pos_right[i][1] < MAX_LENGTH_NEEDED + start_right[1]:
-            counter_right -= 1
-
-        if pos_left[i][2] > MIN_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] > MIN_LENGTH_NEEDED + start_left[1]:
-            counter_left += 1 * len(pos_left) / 6
-        if pos_right[i][2] > MIN_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] > MIN_LENGTH_NEEDED + start_right[
-            1]:
-            counter_right += 1 * len(pos_left) / 6
-
-    if counter_left <= 0:
-        return 4
-    if counter_right <= 0:
-        return 5
-
-    mse_both_hands = 0
-    counter_change = 0
-    for time in range(-1, -len(pos_left), -1):
-        for pos in range(1, 3):
-            mse_both_hands += (pos_left[time][pos] - pos_right[time][pos]) ** 2 / (2 * len(pos_left))
-
-        if pos_left[time][2] >= HEIGHT_BOX and pos_right[time][2] >= HEIGHT_BOX and \
-                pos_left[time][1] > MIN_LENGTH_NEEDED + start_left[1] and \
-                pos_right[time][1] > MIN_LENGTH_NEEDED + start_right[1]:
-            counter_change += 1
-
-    print(mse_both_hands)
-
     mse_left = 0
     mse_right = 0
     for i in range(3):
@@ -174,18 +141,71 @@ def calculate_boxhand(pos_left, pos_right):
             mse_left += (pos_left[-1][i] - POSITION_BUTTON[i]) ** 2 / 3
             mse_right += (pos_right[-1][i] - POSITION_BUTTON[i]) ** 2 / 3
 
-    if mse_left >= mse_right:
-        if mse_both_hands < THRESHOLD_BOTH_HANDS:
-            return 2
-        elif counter_change > THRESHOLD_CHANGED_HANDS_MEAS:
-            return 6
-        return 0
-    else:
-        if mse_both_hands < THRESHOLD_BOTH_HANDS:
-            return 3
-        elif counter_change > THRESHOLD_CHANGED_HANDS_MEAS:
-            return 7
-        return 1
+    match score:
+        case 3:
+            if mse_left >= mse_right:
+                return 0
+            else:
+                return 1
+        case 2:
+            if mse_left >= mse_right:
+                return 2
+            else:
+                return 3
+        case 1:
+            if mse_left >= mse_right:
+                return 5
+            else:
+                return 4
+        case -1:
+            start_left = pos_left[0]
+            start_right = pos_right[0]
+
+            counter_left = 7 * len(pos_left) / 8
+            counter_right = 7 * len(pos_right) / 8
+            for i in range(-1, -len(pos_left), -1):
+                if pos_left[i][2] < MAX_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] < MAX_LENGTH_NEEDED + start_left[1]:
+                    counter_left -= 1
+                if pos_right[i][2] < MAX_HEIGHT_NEEDED + start_right[2] and \
+                        pos_right[i][1] < MAX_LENGTH_NEEDED + start_right[1]:
+                    counter_right -= 1
+
+                if pos_left[i][2] > MIN_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] > MIN_LENGTH_NEEDED + start_left[1]:
+                    counter_left += 1 * len(pos_left) / 6
+                if pos_right[i][2] > MIN_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] > MIN_LENGTH_NEEDED + start_right[
+                    1]:
+                    counter_right += 1 * len(pos_left) / 6
+
+            if counter_left <= 0:
+                return 4
+            if counter_right <= 0:
+                return 5
+
+            mse_both_hands = 0
+            counter_change = 0
+            for time in range(-1, -len(pos_left), -1):
+                for pos in range(1, 3):
+                    mse_both_hands += (pos_left[time][pos] - pos_right[time][pos]) ** 2 / (2 * len(pos_left))
+
+                if pos_left[time][2] >= HEIGHT_BOX and pos_right[time][2] >= HEIGHT_BOX and \
+                        pos_left[time][1] > MIN_LENGTH_NEEDED + start_left[1] and \
+                        pos_right[time][1] > MIN_LENGTH_NEEDED + start_right[1]:
+                    counter_change += 1
+
+            print(mse_both_hands)
+
+            if mse_left >= mse_right:
+                if mse_both_hands < THRESHOLD_BOTH_HANDS:
+                    return 2
+                elif counter_change > THRESHOLD_CHANGED_HANDS_MEAS:
+                    return 6
+                return 0
+            else:
+                if mse_both_hands < THRESHOLD_BOTH_HANDS:
+                    return 3
+                elif counter_change > THRESHOLD_CHANGED_HANDS_MEAS:
+                    return 7
+                return 1
 
 
 def calculate_events(pos_left, pos_right, case, score):
@@ -200,6 +220,7 @@ def calculate_events(pos_left, pos_right, case, score):
     MAX_HEIGHT_NEEDED = manage_settings.get("Data-processing", "MAX_HEIGHT_NEEDED")
     MAX_LENGTH_NEEDED = manage_settings.get("Data-processing", "MAX_LENGTH_NEEDED")
     SPEED_THRESHOLD = manage_settings.get("Data-processing", "SPEED_THRESHOLD")
+    USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
     fs = manage_settings.get("Sensors", "fs")
 
     if case == 0 or case == 2 or case == 7:
@@ -226,9 +247,6 @@ def calculate_events(pos_left, pos_right, case, score):
         while e1 > 1 and a_bh[e1] >= 0:
             e1 -= 1
         print("e1", e1)
-
-        # if score != 3:
-        #     return e1, 0, 0, 0, 0
 
         # calculating e2
         piek_1 = np.argmax(v_bh[e1:e1 + 51]) + e1 - 1

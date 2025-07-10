@@ -134,9 +134,6 @@ class MainWindow(QMainWindow):
         tab_extra = file_menu.addAction("Add extra tab")
         tab_extra.triggered.connect(self.add_another_tab)
         file_menu.addSeparator()
-        tab_setting = file_menu.addAction("Settings")
-        tab_setting.triggered.connect(self.open_settings)
-        file_menu.addSeparator()
         quit_action = file_menu.addAction("Quit")
         quit_action.triggered.connect(self.close)
 
@@ -193,6 +190,10 @@ class MainWindow(QMainWindow):
         self.disconnect_button_action = settings_menu.addAction("Disconnect button")
         self.disconnect_button_action.setEnabled(False)
         self.disconnect_button_action.triggered.connect(lambda: self.disconnecting_button())
+
+        settings_menu.addSeparator()
+        tab_setting = settings_menu.addAction("More settings")
+        tab_setting.triggered.connect(self.open_settings)
 
         help_menu = menu_bar.addMenu("&Help")
         expl_action = help_menu.addAction("Introduction")
@@ -435,6 +436,8 @@ class MainWindow(QMainWindow):
                     tab.event_log = trial_data.iloc[:, 11].values[0:NUMBER_EVENTS].tolist()
 
                 self.events_present = not all(x == 0 for x in tab.event_log)
+                if self.events_present:
+                    tab.first_process = False
 
                 if trial_data.shape[1] < 13 or not self.manual_events:
                     tab.case_status = calculate_boxhand(tab.log_left, tab.log_right)
@@ -541,6 +544,7 @@ class MainWindow(QMainWindow):
         Update all the buttons in the toolbar
         """
         from widget_trials import TrialState
+        SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
 
         tab = self.get_tab()
 
@@ -577,6 +581,12 @@ class MainWindow(QMainWindow):
             self.process_action.setEnabled(False)
             self.event_action.setEnabled(False)
             self.move_events_action.setEnabled(False)
+
+        if SERIAL_BUTTON:
+            self.connection_button_action.setEnabled(True)
+        else:
+            self.disconnecting_button()
+            self.connection_button_action.setEnabled(False)
 
     def start_current_reading(self):
         tab = self.get_tab()
@@ -702,7 +712,6 @@ class MainWindow(QMainWindow):
         self.connection_button_action.setEnabled(True)
         self.disconnect_button_action.setEnabled(False)
         self.statusBar().showMessage("Successfully disconnected to button")
-        self.update_toolbar()
 
     def calibration(self):
         """
@@ -723,10 +732,15 @@ class MainWindow(QMainWindow):
             except:
                 calibration_status = False
             finally:
-                if READ_SAMPLE: calibration_status = True
+                if READ_SAMPLE:
+                    calibration_status = True
 
             if not calibration_status:
-                QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
+                if self.hub_id == 0 and self.lindex == 0 and self.rindex == 0:
+                    QMessageBox.critical(self, "Warning", "Abnormal activity! Check if the hub is charged "
+                                                          "(no red light) and the blue light is on and the source is on")
+                else:
+                    QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
             else:
                 self.first_calibration = False
                 self.update_toolbar()

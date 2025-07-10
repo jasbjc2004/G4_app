@@ -70,13 +70,13 @@ def main():
         LSTM(64, return_sequences=False),
         Dropout(0.2),
         Dense(32, activation='relu'),
-        Dense(1, activation='sigmoid')  # Keep output from [0,3], Output [0,1], scale to [0,3]
+        Dense(1, activation='sigmoid')  # Keep output from [1,3], Output [0,1], scale to [1,3]
     ])
 
     model.compile(optimizer='adam', loss='mse', metrics=['mae'])
 
     # Scale targets to [0,1]
-    y_scaled = y / 3.0
+    y_scaled = (y - 1) / 2.0
 
     early_stop = EarlyStopping(patience=10, restore_best_weights=True)
     history = model.fit(x_padded, y_scaled, epochs=100, batch_size=8,

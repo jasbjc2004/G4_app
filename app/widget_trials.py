@@ -634,16 +634,22 @@ class TrailTab(QWidget):
     def calculate_events(self, got_folder=False, go=False):
         if go or (self.event_log[-1] == 0 and (self.button_pressed or READ_SAMPLE or got_folder)):
             NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
+            USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
+            SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
+
             if go: self.remove_added_text()
 
-            predict_score(self.log_left, self.log_right)
-            
+            if USE_NEURAL_NET:
+                score = predict_score(self.log_left, self.log_right)
+            else:
+                score = -1
+
             self.event_log[-1] = calculate_e6(self.xs)
 
-            self.case_status = calculate_boxhand(self.log_left, self.log_right)
+            self.case_status = calculate_boxhand(self.log_left, self.log_right, score)
             if self.first_event_guess:
-                if (self.button_pressed or self.original_data_file) and not \
-                        (self.original_data_file and self.get_score() == 0):
+                if not SERIAL_BUTTON or ((self.button_pressed or self.original_data_file) and not \
+                        (self.original_data_file and self.get_score() == 0)):
                     self.score.setCurrentIndex(self.get_estimated_score())
 
                 self.first_event_guess = False
@@ -658,9 +664,9 @@ class TrailTab(QWidget):
             notes = ('Left hand is boxhand', 'Right hand is boxhand', 'Both hands as boxhand',
                      'Both hands as boxhand', 'Left hand is not used', 'Right hand is not used',
                      'Hands switched, but right pressed', 'Hands switched, but left pressed', )
-            self.notes_input.append(notes[self.case_status] if self.button_pressed or (self.original_data_file and self.get_score() != 0) else 'Button not pressed')
+            self.notes_input.append(notes[self.case_status] if not SERIAL_BUTTON or (self.button_pressed or (self.original_data_file and self.get_score() != 0)) else 'Button not pressed')
 
-            self.notes_input.append( f"Estimated score: {self.get_estimated_score() if self.button_pressed or (self.original_data_file and self.get_score() != 0) else 0}" )
+            self.notes_input.append( f"Estimated score: {self.get_estimated_score() if not SERIAL_BUTTON or (self.button_pressed or (self.original_data_file and self.get_score() != 0)) else 0}" )
 
             if self.get_score() != 0:
                 e1, e2, e3, e4, e5 = calculate_events(self.log_left, self.log_right, self.case_status, self.get_score())
