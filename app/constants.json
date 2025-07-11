@@ -2,7 +2,9 @@
     "General": {
         "MAX_TRIALS": 20,
         "SERIAL_BUTTON": true,
-        "USE_NEURAL_NET": true
+        "USE_NEURAL_NET": true,
+        "MAX_INTERFERENCE_SPEED": 20,
+        "TIME_INTERFERENCE_SPEED": 0.3
     },
     "Sensors": {
         "fs": 120,

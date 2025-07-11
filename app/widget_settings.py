@@ -43,7 +43,9 @@ class SettingsManager:
               "General":  {
                 "MAX_TRIALS": 20,
                 "SERIAL_BUTTON": True,
-                "USE_NEURAL_NET": True
+                "USE_NEURAL_NET": True,
+                "MAX_INTERFERENCE_SPEED": 20,
+                "TIME_INTERFERENCE_SPEED": 0.3
               },
               "Sensors":  {
                 "fs": 120,
@@ -200,7 +202,7 @@ class Settings(QDialog):
                     var_layout.addWidget(value_box)
                     page_layout.addLayout(var_layout)
                     self.var_widget[(tab, variabel)] = value_box
-                    if tab == 'General' or variabel == "SENSORS_USED" or variabel == "MAX_ATTEMPTS_CONNECT":
+                    if variabel == 'MAX_TRIALS' or variabel == "SENSORS_USED" or variabel == "MAX_ATTEMPTS_CONNECT":
                         validator = IntPointlessValidator(r'^[0-9]*$', 1, 1000)
                         value_box.setValidator(validator)
                     else:
@@ -265,8 +267,14 @@ class Settings(QDialog):
                             try:
                                 if '.' in text:
                                     value.append(float(text))
+                                    if float(text) == 0:
+                                        never_save = True
+                                        empty_widgets.append(sub_widget)
                                 else:
                                     value.append(int(text))
+                                    if int(text) == 0:
+                                        never_save = True
+                                        empty_widgets.append(sub_widget)
                             except ValueError:
                                 value.append(text)
                         sub_widget.setStyleSheet("")
@@ -279,8 +287,14 @@ class Settings(QDialog):
                     try:
                         if '.' in text:
                             value = float(text)
+                            if value == 0:
+                                never_save = True
+                                empty_widgets.append(widget)
                         else:
                             value = int(text)
+                            if value == 0:
+                                never_save = True
+                                empty_widgets.append(widget)
                     except ValueError:
                         value = text
 
@@ -294,7 +308,7 @@ class Settings(QDialog):
         if never_save:
             for widget in empty_widgets:
                 widget.setStyleSheet("background-color: #ffe5e5;")
-            QMessageBox.warning(self, "Error", "One or more fields are empty!")
+            QMessageBox.warning(self, "Error", "One or more fields are empty or zero!")
         elif changes_made:
             if manage_settings.save_settings():
                 self.parent().update_plot()
@@ -390,7 +404,6 @@ class SinglePointDoubleValidator(QDoubleValidator):
                 return QValidator.Invalid, input_str, pos
 
         try:
-            # Handle partial input like "123." or ".5"
             if input_str == '.':
                 return QValidator.Intermediate, input_str, pos
             elif input_str.endswith('.'):
@@ -400,8 +413,25 @@ class SinglePointDoubleValidator(QDoubleValidator):
             else:
                 value = float(input_str)
 
-            # Enforce min/max range
-            if value < self.min_val or value > self.max_val:
+            is_potentially_incomplete = False
+
+            # Single digit could be start of larger number
+            if len(input_str) == 1 and input_str.isdigit():
+                is_potentially_incomplete = True
+            # Ends with decimal point - clearly incomplete
+            elif input_str.endswith('.') and not input_str.startswith('.'):
+                is_potentially_incomplete = True
+
+            if is_potentially_incomplete:
+                return QValidator.Intermediate, input_str, pos
+
+            # Only enforce range on complete numbers
+            """
+            if value < self.min_val:
+                min_str = f"{self.min_val}"
+                return QValidator.Acceptable, min_str, len(min_str)
+            """
+            if value > self.max_val:
                 return QValidator.Invalid, input_str, pos
 
         except ValueError:

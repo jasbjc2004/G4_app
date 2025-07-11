@@ -2,6 +2,7 @@
 import random
 import time
 
+import numpy as np
 import serial
 from PySide6.QtCore import QThread, Signal
 
@@ -11,6 +12,8 @@ from widget_settings import manage_settings
 
 fs = manage_settings.get("Sensors", "fs")
 SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
+MAX_INTERFERENCE_SPEED = manage_settings.get("General", "MAX_INTERFERENCE_SPEED")
+TIME_INTERFERENCE_SPEED = manage_settings.get("General", "TIME_INTERFERENCE_SPEED")
 
 """
 logging.basicConfig(
@@ -26,6 +29,8 @@ class ReadThread(QThread):
     Thread to read the data when plotting the data --> possible to get 120 Hz without letting the program wait
     """
     lost_connection = Signal()
+    interference = Signal()
+    done_reading = Signal()
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -34,18 +39,29 @@ class ReadThread(QThread):
         self.stop_read = False
         self.tab = None
         self.sensor_died = 10
+        self.send_interference = False
+        self.speed1 = []
+        self.speed2 = []
 
     def start_tab_reading(self, tab):
         self.tab = tab
-        global fs, SERIAL_BUTTON
+        global fs, SERIAL_BUTTON, MAX_INTERFERENCE_SPEED, TIME_INTERFERENCE_SPEED
         fs = manage_settings.get("Sensors", "fs")
-        SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
+        MAX_INTERFERENCE_SPEED = manage_settings.get("General", "MAX_INTERFERENCE_SPEED")
+        TIME_INTERFERENCE_SPEED = manage_settings.get("General", "TIME_INTERFERENCE_SPEED")
         self.sensor_died = 10
+        self.send_interference = False
+        self.speed1 = []
+        self.speed2 = []
 
     def stop_current_reading(self):
         self.tab = None
         self.start_time = None
         self.sensor_died = 10
+        self.send_interference = False
+        self.speed1 = []
+        self.speed2 = []
+        self.done_reading.emit()
 
     def run(self):
         self.stop_read = False
@@ -122,15 +138,28 @@ class ReadThread(QThread):
                     time_now = len(self.tab.xs) / fs
                     pos1 = tuple(frame_data.G4_sensor_per_hub[main_window.lindex].pos)
                     pos1 = tuple([pos1[i] if i != 2 else -pos1[i] for i in range(3)])
-                    pos1 += (self.tab.speed_calculation(pos1, time_now, len(self.tab.xs) - 1, True),)
+                    v1 = self.tab.speed_calculation(pos1, time_now, len(self.tab.xs) - 1, True)
+                    pos1 += (v1,)
 
                     pos2 = tuple(frame_data.G4_sensor_per_hub[main_window.rindex].pos)
                     pos2 = tuple([pos2[i] if i != 2 else -pos2[i] for i in range(3)])
-                    pos2 += (self.tab.speed_calculation(pos2, time_now, len(self.tab.xs) - 1, False),)
+                    v2 = self.tab.speed_calculation(pos2, time_now, len(self.tab.xs) - 1, False)
+                    pos2 += (v2,)
 
                     self.tab.xs.append(len(self.tab.xs) / fs)
                     self.tab.log_left.append(pos1)
                     self.tab.log_right.append(pos2)
+
+                    self.speed1.append(v1)
+                    self.speed1 = self.speed1[-fs*TIME_INTERFERENCE_SPEED:]
+                    self.speed2.append(v2)
+                    self.speed2 = self.speed2[-fs * TIME_INTERFERENCE_SPEED:]
+
+                    if not self.send_interference and max(self.speed1) - min(self.speed1) > MAX_INTERFERENCE_SPEED and \
+                            max(self.speed2) - min(self.speed2) > MAX_INTERFERENCE_SPEED:
+                        print('here')
+                        self.send_interference = True
+                        self.interference.emit()
 
             elif BEAUTY_SPEED:
                 elapsed_time = len(self.tab.xs) / fs

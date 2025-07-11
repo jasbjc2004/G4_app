@@ -15,7 +15,7 @@ import pikepdf
 
 from window_main_plot import MainWindow
 
-MAX_TRIALS = manage_settings.get("General", "MAX_TRIALS") + 1
+MAX_TRIALS = manage_settings.get("General", "MAX_TRIALS")
 
 
 class SetUp(QDialog):
@@ -46,11 +46,15 @@ class SetUp(QDialog):
         # Number of trials
         trial_layout = QHBoxLayout()
         self.combo_box = QComboBox()
-        for i in range(1, MAX_TRIALS):
+        for i in range(1, MAX_TRIALS+1):
             self.combo_box.addItem(str(i), i)
 
         self.label = QLabel("Number of trials: ")
-        self.combo_box.setCurrentIndex(9)
+        print(MAX_TRIALS)
+        if MAX_TRIALS >= 10:
+            self.combo_box.setCurrentIndex(9)
+        else:
+            self.combo_box.setCurrentIndex(MAX_TRIALS-1)
 
         trial_layout.addWidget(self.label)
         trial_layout.addWidget(self.combo_box)

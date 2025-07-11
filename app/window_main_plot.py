@@ -80,6 +80,9 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.data_thread = ReadThread(self)
         self.data_thread.lost_connection.connect(self.data_loss)
+        self.interference = False
+        self.data_thread.interference.connect(self.data_loss)
+        self.data_thread.done_reading.connect(self.interference_message)
 
         self.sound = sound
         self.participant_folder = None
@@ -105,6 +108,14 @@ class MainWindow(QMainWindow):
     def data_loss(self):
         self.stop_current_reading()
         QMessageBox.critical(self, "Error", "Sensor is down, please check the connections")
+
+    def interference_detected(self):
+        self.interference = True
+
+    def interference_message(self):
+        if self.interference:
+            QMessageBox.information(self, "Warning", "There was a small interference, please check the result")
+            self.interference = False
 
     def setup(self, num_trials):
         from widget_trials import TrailTab

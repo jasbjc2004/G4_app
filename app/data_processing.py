@@ -280,7 +280,7 @@ def calculate_events(pos_left, pos_right, case, score):
             e1 -= 1
         print("e1", e1)
 
-        # calculating e2
+        # calculating e2 --> change maybe
         piek_1 = np.argmax(v_bh[e1:e1 + 51]) + e1 - 1
         print("piek_1 ", piek_1)
         piek_2 = np.argmax(v_bh[piek_1 + 51:piek_1 + 1001]) + piek_1 + 50 - 1

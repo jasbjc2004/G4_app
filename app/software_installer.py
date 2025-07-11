@@ -54,6 +54,8 @@ def build_executable(
 
 def main():
     app_name = 'final_test_software'
+    input("Are you sure you want to delete the previous app?")
+
     app_folder = os.path.join("dist", app_name)
     if os.path.exists(app_folder):
         shutil.rmtree(app_folder)
