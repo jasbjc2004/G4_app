@@ -1,4 +1,4 @@
-import logging
+#import logging
 
 import numpy as np
 from scipy.signal import argrelextrema
@@ -13,11 +13,13 @@ from tensorflow import keras
 All functions needed for the data processing and calibration
 """
 
+"""
 logging.basicConfig(
     filename='logboek.txt',
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+"""
 
 # USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
 
@@ -98,17 +100,15 @@ def calibration_to_center(sys_id):
 def predict_score(pos_left, pos_right):
     left_hand = np.array(pos_left)
     right_hand = np.array(pos_right)
-    print(left_hand.shape, right_hand.shape)
     hands = np.concatenate([left_hand, right_hand], axis=1)
     hands = np.expand_dims(hands, axis=0)
-    print(hands.shape)
 
     try:
-        prediction = model.predict(hands) * 2.0 + 1
+        prediction = model.predict(hands, verbose=0) * 2.0 + 1
     except Exception as error:
         prediction = 0
         print(error)
-        logging.error(error, exc_info=True)
+        #logging.error(error, exc_info=True)
 
     print(prediction[0][0])
     print(round(prediction[0][0]))
@@ -319,7 +319,7 @@ def calculate_events(pos_left, pos_right, case, score):
 
         return e1, e2, e3, e4, e5
     except Exception as error:
-        logging.error(error, exc_info=True)
+        #logging.error(error, exc_info=True)
         return 0, 0, 0, 0, 0
 
 
@@ -410,7 +410,7 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     # Count the number of local extrema
     smooth_bh = len(max_bh) + len(min_bh)
 
-    subset_t = tv[e1:e3]
+    subset_t = tv[e4:e6]
 
     max_th = argrelextrema(subset_t, np.greater)[0]
     min_th = argrelextrema(subset_t, np.less)[0]

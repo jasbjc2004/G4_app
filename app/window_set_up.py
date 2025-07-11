@@ -5,13 +5,17 @@ import pygame
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QVBoxLayout, QPushButton, QLineEdit, QLabel, QHBoxLayout,
-    QDateEdit, QTextEdit, QMessageBox, QComboBox, QDialog, QCheckBox, QFileDialog,
+    QDateEdit, QTextEdit, QMessageBox, QComboBox, QDialog, QCheckBox, QFileDialog, QApplication,
 )
 from PySide6.QtCore import QDate, QSize
 
-from window_main_plot import MainWindow
+from widget_settings import manage_settings
 
 import pikepdf
+
+from window_main_plot import MainWindow
+
+MAX_TRIALS = manage_settings.get("General", "MAX_TRIALS") + 1
 
 
 class SetUp(QDialog):
@@ -42,7 +46,7 @@ class SetUp(QDialog):
         # Number of trials
         trial_layout = QHBoxLayout()
         self.combo_box = QComboBox()
-        for i in range(1, 21):
+        for i in range(1, MAX_TRIALS):
             self.combo_box.addItem(str(i), i)
 
         self.label = QLabel("Number of trials: ")
@@ -110,6 +114,7 @@ class SetUp(QDialog):
         button_layout = QHBoxLayout()
         self.save_button = QPushButton("Save")
         self.save_button.clicked.connect(self.save_button_pressed)
+        self.save_button.setDefault(True)
 
         self.back_button = QPushButton("Back")
         self.back_button.clicked.connect(self.back_button_pressed)
@@ -122,6 +127,24 @@ class SetUp(QDialog):
         main_layout.addLayout(button_layout)
 
         self.setLayout(main_layout)
+
+        screen = QApplication.primaryScreen()
+        screen_rect = screen.geometry()
+
+        window_rect = self.frameGeometry()
+        center_point = screen_rect.center()
+        window_rect.moveCenter(center_point)
+
+        self.move(window_rect.topLeft())
+
+        print(f"Screen rect: {screen_rect}")
+        print(f"Screen center: {center_point}")
+        print(f"Window size: {window_rect.size()}")
+        print(f"Final position: {window_rect.topLeft()}")
+
+        # Verify final position
+        final_pos = self.pos()
+        print(f"Final window position: {final_pos}")
 
         self.sound = list()
         pygame.mixer.init()
@@ -153,7 +176,7 @@ class SetUp(QDialog):
     def set_dir(self, folder):
         self.full_path = folder
 
-        self.path.setPlaceholderText(folder)
+        self.path.setText(folder)
 
     def save_button_pressed(self):
         if self.name_input.text().strip() == "":

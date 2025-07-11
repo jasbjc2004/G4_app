@@ -1,4 +1,4 @@
-import logging
+#import logging
 import random
 import time
 
@@ -12,11 +12,13 @@ from widget_settings import manage_settings
 fs = manage_settings.get("Sensors", "fs")
 SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
 
+"""
 logging.basicConfig(
     filename='logboek.txt',
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+"""
 
 
 class ReadThread(QThread):
@@ -58,7 +60,7 @@ class ReadThread(QThread):
                 else:
                     self.keep_sensor_alive()
             except Exception as e:
-                logging.error(e, exc_info=True)
+                #logging.error(e, exc_info=True)
                 print(f"Error in read_sensor_data: {e}")
                 time.sleep(0.5)
 
@@ -76,7 +78,6 @@ class ReadThread(QThread):
 
         if not READ_SAMPLE:
             get_frame_data(main_window.dongle_id, [main_window.hub_id])
-            print('here')
 
     def read_sensor_data(self):
         """
@@ -174,7 +175,6 @@ class ReadThread(QThread):
                 self.stop_current_reading()
 
             if self.tab and self.tab.log_left[3] == 0:
-                print('here')
                 self.lost_connection.emit()
         except:
             return

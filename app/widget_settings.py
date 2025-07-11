@@ -1,5 +1,5 @@
 import json
-import logging
+#import logging
 import os
 
 from PySide6.QtCore import Qt, QRegularExpression
@@ -11,11 +11,13 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLa
 
 from constants import COLORS
 
+"""
 logging.basicConfig(
     filename='logboek.txt',
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+"""
 
 
 class SettingsManager:
@@ -80,7 +82,7 @@ class SettingsManager:
             print(f"Settings saved to {self.config_file}")
             return True
         except Exception as e:
-            logging.error(e, exc_info=True)
+            #logging.error(e, exc_info=True)
             print(f"Error saving settings: {e}")
             return False
 
