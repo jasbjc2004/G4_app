@@ -24,15 +24,16 @@ def build_executable(
         '--name', name,
         '--onedir',
         '--windowed',  # No console window
-        #'--collect - all'
+        '--collect-all=scipy'
     ]
 
     if icon:
         command.extend(['--icon='+icon])
 
     if additional_files:
-        for file_path, dest_path in additional_files:
-            command.extend(['--add-data', f'{file_path}:{dest_path}'])
+        for file_path in additional_files:
+            directory_file = '/'.join(file_path.split('/')[:-1])
+            command.extend(['--add-data', f'{file_path}:{directory_file}'])
 
     if main_script:
         command.append(main_script)
@@ -40,6 +41,8 @@ def build_executable(
     # Print the command for debugging
     print("Running PyInstaller command:")
     print(" ".join(command))
+
+    input("Command ready, press enter to continue")
 
     try:
         # Run the PyInstaller command
@@ -56,18 +59,22 @@ def main():
     app_name = 'final_test_software'
     input("Are you sure you want to delete the previous app?")
 
-    app_folder = os.path.join("dist", app_name)
-    if os.path.exists(app_folder):
-        shutil.rmtree(app_folder)
-
-    if os.path.exists("build"):
-        shutil.rmtree("build")
-
+    folders_to_remove = ["dist", "build", "__pycache__"]
+    for folder in folders_to_remove:
+        if os.path.exists(folder):
+            shutil.rmtree(folder)
+    """
     spec_file = app_name+'.spec'
     if os.path.exists(spec_file):
         os.remove(spec_file)
+    """
 
     input("All files deleted, press enter to continue")
+
+    main_script = "main.py"
+    if not os.path.exists(main_script):
+        print(f"Error: no main-file found")
+        return
 
     extra_files = []
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -76,45 +83,43 @@ def main():
         file_path = os.path.join(current_dir, filename)
 
         if os.path.isfile(file_path) and filename.endswith('.keras'):
-            extra_files.append((file_path, '.'))
+            extra_files.append(file_path.replace(current_dir, '.').replace('\\', '/'))
 
     needed_files = os.path.join(current_dir, 'NEEDED', 'FILES')
     if os.path.exists(needed_files):
         for filename in os.listdir(needed_files):
             file_path = os.path.join(needed_files, filename)
-            if os.path.isfile(file_path):
-                extra_files.append((current_dir, '.'))
+            if not os.path.isdir(file_path):
+                try:
+                    extra_files.append(file_path.replace(current_dir, '.').replace('\\', '/'))
+                except:
+                    print(f"Error: failed to get info from: {file_path}!")
+                    continue
 
     needed_music = os.path.join(current_dir, 'NEEDED', 'MUSIC')
     if os.path.exists(needed_music):
-        for filename in os.listdir(needed_files):
-            file_path = os.path.join(needed_files, filename)
-            if os.path.isfile(file_path):
-                extra_files.append((current_dir, '.'))
+        for filename in os.listdir(needed_music):
+            file_path = os.path.join(needed_music, filename)
+            if not os.path.isdir(file_path):
+                try:
+                    extra_files.append(file_path.replace(current_dir, '.').replace('\\', '/'))
+                except:
+                    print(f"Error: failed to get info from: {file_path}!")
+                    continue
 
     needed_pictures = os.path.join(current_dir, 'NEEDED', 'PICTURES')
     if os.path.exists(needed_pictures):
-        for filename in os.listdir(needed_files):
-            file_path = os.path.join(needed_files, filename)
-            if os.path.isfile(file_path):
-                extra_files.append((current_dir, '.'))
-
-    main_script = None
-    for filename in os.listdir(current_dir):
-        if filename == "main.py":
-            main_script = os.path.join(current_dir, filename)
-            break
-
-    if not main_script:
-        print("Error: main.py not found!")
-        return
+        for filename in os.listdir(needed_pictures):
+            file_path = os.path.join(needed_pictures, filename)
+            if not os.path.isdir(file_path):
+                try:
+                    extra_files.append(file_path.replace(current_dir, '.').replace('\\', '/'))
+                except:
+                    print(f"Error: failed to get info from: {file_path}!")
+                    continue
 
     # Detect icon file
-    icon = None
-    for file_path, dest_path in extra_files:
-        if file_path.endswith('.ico'):
-            icon = file_path
-            break
+    icon = [f for f in extra_files if f.endswith('.ico')][0]
 
     # Build the executable
     build_executable(
@@ -126,4 +131,6 @@ def main():
 
 
 if __name__ == '__main__':
+    import glob
+
     main()
