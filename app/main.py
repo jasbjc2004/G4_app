@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication, QSplashScreen
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    pixmap = QPixmap(os.path.join(os.path.abspath("."), "NEEDED/PICTURES/hands.ico"))
+    pixmap = QPixmap(os.path.join((os.path.dirname(os.path.abspath(__file__))), "NEEDED/PICTURES/hands.ico"))
     splash = QSplashScreen(pixmap)
     splash.show()
 
