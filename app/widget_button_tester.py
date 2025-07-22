@@ -110,8 +110,6 @@ class ButtonTester(QDialog):
             try:
                 while self.button_connect.in_waiting > 0:
                     data = self.button_connect.readline().decode().strip()
-                    if data:
-                        print(f"Button state: {data}")  # Modify based on what your device sends
 
                     if data == '1':
                         self.button.setStyleSheet("background-color : grey")

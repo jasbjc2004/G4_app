@@ -152,10 +152,14 @@ class SetUp(QDialog):
 
         self.sound = list()
         pygame.mixer.init()
-        dir_sound = (os.path.join(file_directory, 'NEEDED/MUSIC/Bumba.mp3'),
-                     os.path.join(file_directory, 'NEEDED/MUSIC/applause.mp3'),
-                     os.path.join(file_directory, 'NEEDED/MUSIC/Bluey.mp3'),
-                     os.path.join(file_directory, 'NEEDED/MUSIC/bong.mp3'))
+
+        music_folder = os.path.join(file_directory, 'NEEDED/MUSIC')
+        dir_sound = []
+        for filename in os.listdir(music_folder):
+            file_path = os.path.join(music_folder, filename)
+
+            if filename.endswith('.mp3'):
+                dir_sound.append(file_path)
 
         threads_sound = [threading.Thread(target=self.load_sound, args=(dir_sound[i],)) for i in range(len(dir_sound))]
         for i in range(len(threads_sound)):

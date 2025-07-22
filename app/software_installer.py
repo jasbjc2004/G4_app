@@ -63,11 +63,11 @@ def main():
     for folder in folders_to_remove:
         if os.path.exists(folder):
             shutil.rmtree(folder)
-    """
+
     spec_file = app_name+'.spec'
     if os.path.exists(spec_file):
         os.remove(spec_file)
-    """
+
 
     input("All files deleted, press enter to continue")
 

@@ -1,5 +1,5 @@
 import json
-#import logging
+# import logging
 import os
 
 from PySide6.QtCore import Qt, QRegularExpression
@@ -22,6 +22,7 @@ logging.basicConfig(
 
 class SettingsManager:
     """Class to manage all the settings: loading at the beginning, applying changes and resetting to default"""
+
     def __init__(self, config_file='constants.json'):
         file_directory = (os.path.dirname(os.path.abspath(__file__)))
         self.config_file = os.path.join(file_directory, config_file)
@@ -40,39 +41,40 @@ class SettingsManager:
 
     def create_default_settings(self):
         self.settings = {
-              "General":  {
+            "General": {
                 "MAX_TRIALS": 20,
                 "SERIAL_BUTTON": True,
                 "USE_NEURAL_NET": True,
                 "MAX_INTERFERENCE_SPEED": 20,
                 "TIME_INTERFERENCE_SPEED": 0.3
-              },
-              "Sensors":  {
+            },
+            "Sensors": {
                 "fs": 120,
                 "fc": 10,
                 "SENSORS_USED": 2,
                 "MAX_ATTEMPTS_CONNECT": 10
-              },
-              "Data-processing": {
+            },
+            "Data-processing": {
                 "ORDER_FILTER": 2,
+                "ORDER_EXTREMA": 10,
                 "SPEED_FILTER": True,
                 "MAX_HEIGHT_NEEDED": 2,
                 "MAX_LENGTH_NEEDED": 2,
                 "MIN_HEIGHT_NEEDED": 3,
                 "MIN_LENGTH_NEEDED": 3,
-                "POSITION_BUTTON": [0,15,1.5],
+                "POSITION_BUTTON": [0, 12, 4],
                 "THRESHOLD_BOTH_HANDS": 20,
                 "THRESHOLD_CHANGED_HANDS_MEAS": 20,
                 "SPEED_THRESHOLD": 0.05,
                 "HEIGHT_BOX": 15,
                 "THRESHOLD_CALIBRATION": 0.01,
                 "MAX_ATTEMPTS_CALIBRATION": 5
-              },
-              "Events": {
+            },
+            "Events": {
                 "NUMBER_EVENTS": 6,
                 "COLORS_EVENT": ["Blue", "Purple", "Orange", "Yellow", "Pink", "Black"],
                 "LABEL_EVENT": ["e1", "e2", "e3", "e4", "e5", "e6"]
-              }
+            }
         }
         self.save_settings()
 
@@ -84,7 +86,7 @@ class SettingsManager:
             print(f"Settings saved to {self.config_file}")
             return True
         except Exception as e:
-            #logging.error(e, exc_info=True)
+            # logging.error(e, exc_info=True)
             print(f"Error saving settings: {e}")
             return False
 
@@ -112,6 +114,7 @@ class Settings(QDialog):
     """
     Settings to change the constant values
     """
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -206,7 +209,10 @@ class Settings(QDialog):
                         validator = IntPointlessValidator(r'^[0-9]*$', 1, 1000)
                         value_box.setValidator(validator)
                     else:
-                        validator = SinglePointDoubleValidator(0.001, 1000.0, 2)
+                        if variabel == "THRESHOLD_CALIBRATION":
+                            validator = SinglePointDoubleValidator(0.0001, 1000.0, 4)
+                        else:
+                            validator = SinglePointDoubleValidator(0.001, 1000.0, 2)
                         value_box.setValidator(validator)
 
             page_layout.addStretch()
@@ -267,12 +273,12 @@ class Settings(QDialog):
                             try:
                                 if '.' in text:
                                     value.append(float(text))
-                                    if float(text) == 0:
+                                    if float(text) == 0 and not variabel == 'POSITION_BUTTON':
                                         never_save = True
                                         empty_widgets.append(sub_widget)
                                 else:
                                     value.append(int(text))
-                                    if int(text) == 0:
+                                    if int(text) == 0 and not variabel == 'POSITION_BUTTON':
                                         never_save = True
                                         empty_widgets.append(sub_widget)
                             except ValueError:

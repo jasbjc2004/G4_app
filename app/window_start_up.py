@@ -2,13 +2,13 @@ import os
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QVBoxLayout, QWidget, QPushButton, QFileDialog, QApplication
+    QVBoxLayout, QWidget, QPushButton, QFileDialog, QApplication, QDialog
 )
 
 from window_set_up import SetUp
 
 
-class StartUp(QWidget):
+class StartUp(QDialog):
     """
     Window at the beginning of the program, to load existing project or start a new one
     """
@@ -25,23 +25,13 @@ class StartUp(QWidget):
         self.button_new.clicked.connect(self.open_setup)
         self.button_old = QPushButton("Open existing Project")
         self.button_old.clicked.connect(self.reopen_setup)
+        self.compare_patients = QPushButton("Compare participants")
 
         layout.addWidget(self.button_new)
         layout.addWidget(self.button_old)
+        layout.addWidget(self.compare_patients)
 
         self.setLayout(layout)
-
-        screen = QApplication.primaryScreen()
-        screen_geometry = screen.availableGeometry()
-
-        # Get actual window size (now accurate after full setup)
-        window_rect = self.frameGeometry()
-
-        # Calculate center position
-        x = (screen_geometry.width() - window_rect.width()) // 2
-        y = (screen_geometry.height() - window_rect.height()) // 2
-
-        self.move(x, y)
 
     # go to setup window
     def open_setup(self):

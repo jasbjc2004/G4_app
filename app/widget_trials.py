@@ -7,7 +7,7 @@ import pygame
 from enum import Enum
 import threading
 
-from PySide6.QtGui import QColor, QTextCursor
+from PySide6.QtGui import QColor, QTextCursor, QTextTableFormat, QTextCharFormat
 from PySide6.QtWidgets import (
     QVBoxLayout, QWidget, QLabel, QHBoxLayout,
     QTextEdit, QMessageBox, QSizePolicy, QComboBox
@@ -317,11 +317,19 @@ class TrailTab(QWidget):
             else:
                 self.event_position[self.moving_event_index] = 'Right'
 
-            self.notes_input.setTextColor(QColor(Qt.red))
-            self.notes_input.append('')
-            self.notes_input.append(f'--> Alternated e{self.moving_event_index+1}: {index_search}, to a time: {round(x, 2)}')
-            self.notes_input.setTextColor(QColor(Qt.black))
+            cursor = self.notes_input.textCursor()
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(Qt.black))
+            cursor.setCharFormat(fmt)
 
+            cursor.insertText('\n')
+
+            fmt.setForeground(QColor(Qt.red))
+            cursor.setCharFormat(fmt)
+
+            cursor.insertText(f'--> Alternated e{self.moving_event_index+1}: {index_search}, to a time: {round(x, 2)}')
+
+            fmt.setForeground(QColor(Qt.black))
             self.move_event = None
             self.moving_event_index = None
 
@@ -668,15 +676,21 @@ class TrailTab(QWidget):
                 self.event_log = [0]*NUMBER_EVENTS
                 self.score.setCurrentIndex(0)
 
-            self.notes_input.append(" ")
+            cursor = self.notes_input.textCursor()
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(Qt.black))
+            cursor.setCharFormat(fmt)
 
-            self.notes_input.setTextColor(QColor(Qt.red))
+            cursor.insertText('\n')
+
+            fmt.setForeground(QColor(Qt.red))
+            cursor.setCharFormat(fmt)
             notes = ('Left hand is boxhand', 'Right hand is boxhand', 'Both hands as boxhand',
                      'Both hands as boxhand', 'Left hand is not used', 'Right hand is not used',
                      'Hands switched, but right pressed', 'Hands switched, but left pressed', )
-            self.notes_input.append(notes[self.case_status] if not SERIAL_BUTTON or (self.button_pressed or (self.original_data_file and self.get_score() != 0)) else 'Button not pressed')
-
-            self.notes_input.append( f"Estimated score: {self.get_estimated_score() if not SERIAL_BUTTON or (self.button_pressed or (self.original_data_file and self.get_score() != 0)) else 0}" )
+            cursor.insertText(notes[self.case_status] if not SERIAL_BUTTON or (self.button_pressed or (self.original_data_file and self.get_score() != 0)) else 'Button not pressed')
+            cursor.insertText('\n')
+            cursor.insertText( f"Estimated score: {self.get_estimated_score() if not SERIAL_BUTTON or (self.button_pressed or (self.original_data_file and self.get_score() != 0)) else 0}" )
 
             if self.get_score() != 0:
                 e1, e2, e3, e4, e5 = calculate_events(self.log_left, self.log_right, self.case_status, self.get_score())
@@ -698,30 +712,40 @@ class TrailTab(QWidget):
                 self.extra_parameters_bim, self.extra_parameters_uni = [], []
 
             if self.get_score() != 0:
-                text = self.text_events(self.event_log)
-                for line in text:
-                    self.notes_input.append(line)
+                e1, e2, e3, e4, e5, e6 = self.event_log
+                table_format = QTextTableFormat()
+                table_format.setBorderBrush(QColor("red"))
+                table_format.setBorder(1)
+                table_format.setCellPadding(5)
+                table_format.setCellSpacing(0)
+
+                cursor = self.notes_input.textCursor()
+                table = cursor.insertTable(7, 4, table_format)
+
+                data = [
+                    ["", "Frame", "Abs. time (s)", "Rel. time (s)"],
+                    ["e1", str(e1), str(round(self.xs[e1], 2)), '0'],
+                    ["e2", str(e2), str(round(self.xs[e2], 2)), str(round(self.xs[e2] - self.xs[e1], 2))],
+                    ["e3", str(e3), str(round(self.xs[e3], 2)), str(round(self.xs[e3] - self.xs[e1], 2))],
+                    ["e4", str(e4), str(round(self.xs[e4], 2)), str(round(self.xs[e4] - self.xs[e1], 2))],
+                    ["e5", str(e5) if e4 != e5 else '', str(round(self.xs[e5], 2)), str(round(self.xs[e5] - self.xs[e1], 2))],
+                    ["e6", str(e6), str(round(self.xs[e6], 2)), str(round(self.xs[e6] - self.xs[e6], 2))]
+                ]
+
+                char_format = QTextCharFormat()
+                char_format.setForeground(QColor("red"))
+
+                for row in range(7):
+                    for col in range(4):
+                        cell = table.cellAt(row, col)
+                        cell_cursor = cell.firstCursorPosition()
+                        cell_cursor.setCharFormat(char_format)
+                        cell_cursor.insertText(data[row][col])
 
             self.notes_input.setTextColor(QColor(Qt.black))
 
             self.update_plot(True)
             self.window().update_toolbar()
-
-    def text_events(self, events):
-        if len(events) < 6:
-            return
-
-        e1, e2, e3, e4, e5, e6 = events
-
-        text_events_notes = []
-        text_events_notes.append(f'The measured data is e1: {e1} and e2: {e2}')
-        text_events_notes.append(f'The time is then for e1: {round(self.xs[e1], 2)} and e2: {round(self.xs[e2], 2)}')
-        text_events_notes.append(f'The measured data is e3: {e3}')
-        text_events_notes.append(f'The time is then for e3: {round(self.xs[e3], 2)}')
-        text_events_notes.append('')
-        text_events_notes.append(f'The measured data is e4: {e4} and e5: {e5}')
-        text_events_notes.append(f'The time is then for e4: {round(self.xs[e4], 2)} and e5: {round(self.xs[e5], 2)}')
-        return text_events_notes
 
     def draw_events(self):
         COLORS_EVENT = manage_settings.get("Events", "COLORS_EVENT")

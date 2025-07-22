@@ -19,7 +19,6 @@ class ProgressionBar(QDialog):
         self.setWindowIcon(QIcon(dir_icon))
         self.setGeometry(550, 275, 350, 75)
 
-        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         self.setModal(True)
 
         layout = QVBoxLayout()

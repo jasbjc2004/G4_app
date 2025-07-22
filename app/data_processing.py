@@ -361,6 +361,7 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     :return: 4 bimanual and 10 unimanual parameters
     """
     fs = manage_settings.get("Sensors", "fs")
+    ORDER_EXTREMA = manage_settings.get("Data-processing", "ORDER_EXTREMA")
 
     e1, e2, e3, e4, e5, e6 = events
     bx = np.array([pos[0] for pos in box_hand])
@@ -402,7 +403,7 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     t_th = ((e6 - e4) / fs)/tt
 
     # if start / endpoint is also a max => not taken into account. if need => first local max of b then sum in range e1: e3
-    subset = bv[e1:e3]
+    subset = bv[e1:e3+1]
 
     max_bh = argrelextrema(subset, np.greater)[0]
     min_bh = argrelextrema(subset, np.less)[0]
@@ -410,18 +411,18 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     # Count the number of local extrema
     smooth_bh = len(max_bh) + len(min_bh)
 
-    subset_t = tv[e4:e6]
+    subset_t = tv[e4:e6+1]
 
-    max_th = argrelextrema(subset_t, np.greater)[0]
-    min_th = argrelextrema(subset_t, np.less)[0]
+    max_th = argrelextrema(subset_t, np.greater, order=ORDER_EXTREMA)[0]
+    min_th = argrelextrema(subset_t, np.less, order=ORDER_EXTREMA)[0]
 
     # Count the number of local extrema
     smooth_th = len(max_th) + len(min_th)
 
     # path-length of box hand (d=distance)
-    dbx = bx[e1:e3]
-    dby = by[e1:e3]
-    dbz = bz[e1:e3]
+    dbx = bx[e1:e3+1]
+    dby = by[e1:e3+1]
+    dbz = bz[e1:e3+1]
 
     dbx = np.diff(dbx)
     dby = np.diff(dby)
@@ -431,9 +432,9 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     d_bh = np.sum(d_bh)
 
     # path-length of box hand - eerste fase tot aan de doos
-    dbx_p1 = bx[e1:e2]
-    dby_p1 = by[e1:e2]
-    dbz_p1 = bz[e1:e2]
+    dbx_p1 = bx[e1:e2+1]
+    dby_p1 = by[e1:e2+1]
+    dbz_p1 = bz[e1:e2+1]
 
     dbx_p1 = np.diff(dbx_p1)
     dby_p1 = np.diff(dby_p1)
@@ -443,9 +444,9 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     d_bh_p1 = np.sum(d_bh_p1)
 
     # path-length of box hand - tweede fase deksel van de doos op hoogste punt
-    dbx_p2 = bx[e2:e3]
-    dby_p2 = by[e2:e3]
-    dbz_p2 = bz[e2:e3]
+    dbx_p2 = bx[e2:e3+1]
+    dby_p2 = by[e2:e3+1]
+    dbz_p2 = bz[e2:e3+1]
 
     dbx_p2 = np.diff(dbx_p2)
     dby_p2 = np.diff(dby_p2)
@@ -455,9 +456,9 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     d_bh_p2 = sum(d_bh_p2)
 
     # path-length of trigger hand of triggerhand, not yet activated as e5 still needs to be calculated ??? -> check na wat dit betekent
-    dtx = tx[e4:e6]
-    dty = ty[e4:e6]
-    dtz = tz[e4:e6]
+    dtx = tx[e4:e6+1]
+    dty = ty[e4:e6+1]
+    dtz = tz[e4:e6+1]
 
     dtx = np.diff(dtx)
     dty = np.diff(dty)

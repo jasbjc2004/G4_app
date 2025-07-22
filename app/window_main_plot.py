@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QToolBar, QStatusBar, QTabWidget,
     QDialog, QCheckBox, QDialogButtonBox,
 )
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QIcon, QColor, QTextCursor, QTextCharFormat
 from PySide6.QtCore import QSize, Signal, QThread, QMutex, QWaitCondition, Qt
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
@@ -536,15 +536,20 @@ class MainWindow(QMainWindow):
                     elif trial_number == 0:
                         continue
 
-                    elif rule_text == 'Table':
+                    elif rule_text == 'Table' or rule_text == 'Parameters' or rule_text == 'Events':
                         in_table = True
 
                     elif rule_text == 'Average over all trials with score 3':
                         break
 
                     else:
+                        cursor = tab.notes_input.textCursor()
+                        fmt = QTextCharFormat()
+                        fmt.setForeground(QColor(Qt.black))
+                        cursor.setCharFormat(fmt)
                         if not in_table and rule_text != 'No Notes':
-                            tab.notes_input.append(rule_text)
+                            cursor.insertText(rule_text)
+                            cursor.insertText('\n')
 
         return all_zeros
 
@@ -622,7 +627,7 @@ class MainWindow(QMainWindow):
             self.event_action.setEnabled(False)
             self.move_events_action.setEnabled(False)
 
-        if SERIAL_BUTTON:
+        if SERIAL_BUTTON and self.button_trigger is None:
             self.connection_button_action.setEnabled(True)
         else:
             self.disconnecting_button()
@@ -741,13 +746,12 @@ class MainWindow(QMainWindow):
         self.connection_action.setEnabled(True)
         self.calibrate_action.setEnabled(False)
         self.disconnect_sensor_action.setEnabled(False)
-        self.button_trigger = None
-        self.connection_button_action.setEnabled(True)
         self.statusBar().showMessage("Successfully disconnected to sensors")
         self.status_widget.set_status("disconnected")
         self.update_toolbar()
 
     def disconnecting_button(self):
+        self.button_trigger.close()
         self.button_trigger = None
         self.connection_button_action.setEnabled(True)
         self.disconnect_button_action.setEnabled(False)
@@ -1025,7 +1029,7 @@ class MainWindow(QMainWindow):
 
             self.save_all = True
 
-            if self.participant_folder is None:
+            if self.participant_folder is None or not os.path.exists(self.participant_folder):
                 self.make_dir()
 
             self.make_progress()
@@ -1045,7 +1049,7 @@ class MainWindow(QMainWindow):
 
             break
 
-    def add_plots_data(self, plot_index, xs, left_data, right_data, events, event_position):
+    def add_plots_data(self, plot_index, xs, left_data, right_data, events, event_position, pos_plot):
         """
         Plot the data in the PDF (needed to stay in MainThread)
         :param plot_index: which plot has to be made (x,y,z,v) as index
@@ -1055,6 +1059,7 @@ class MainWindow(QMainWindow):
         :param right_data: the coordinates of the right hand
         :param events: the indexes of each event
         :param event_position: the position of each event
+        :param pos_plot: a tuple containing the current index of the plot and the total selected plots
         """
         COLORS_EVENT = manage_settings.get("Events", "COLORS_EVENT")
         LABEL_EVENT = manage_settings.get("Events", "LABEL_EVENT")
@@ -1096,13 +1101,42 @@ class MainWindow(QMainWindow):
 
             ax.grid(True)
 
+            fig_width_inch, fig_height_inch = fig.get_size_inches()
+            aspect_ratio = fig_height_inch / fig_width_inch
+
             plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
             plt.close(fig)
 
             buf.seek(0)
 
-            self.pdf.image(buf, x=None, y=None, w=100)
-            self.pdf.ln(5)
+            x_start = 15
+            width = 80
+            spacing_x = 5
+            spacing_y = 15
+
+            if pos_plot[0] not in [1, 3]:
+                self.y_image = self.pdf.get_y()
+            if pos_plot[0] == 2:
+                self.pdf.ln(5)
+
+            image_height = width * aspect_ratio
+
+            x_image = x_start + pos_plot[0] % 2 * (width + spacing_x)
+
+            current_y = self.pdf.get_y()
+            page_height = self.pdf.h - 20  # margin
+            available_space = page_height - current_y
+
+            if available_space < image_height:
+                self.pdf.add_page()
+                self.y_image = self.pdf.get_y()
+
+            self.pdf.image(buf, x=x_image, y=self.y_image, w=width)
+
+            if pos_plot[0] in [1, 3] or pos_plot[0] == pos_plot[1]-1:
+                total_height = image_height + spacing_y
+                self.pdf.set_y(self.y_image + total_height)
+
         except Exception as e:
             #logging.error(e, exc_info=True)
             print(str(e))
@@ -1121,6 +1155,7 @@ class MainWindow(QMainWindow):
 
     def show_error(self, e):
         #logging.error(e, exc_info=True)
+        self.progression.close()
         QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
 
     def finish_export(self):
@@ -1130,7 +1165,16 @@ class MainWindow(QMainWindow):
 
         if self.save_all:
             pdf_file = os.path.join(self.participant_folder, f"{self.name_pdf}.pdf")
-            self.pdf.output(pdf_file)
+            try:
+                self.pdf.output(pdf_file)
+            except PermissionError:
+                print("PDF is waarschijnlijk nog open. Sluit het bestand en probeer opnieuw.")
+                counter = 1
+                while os.path.exists(pdf_file):
+                    pdf_file = os.path.join(self.participant_folder, f"{self.name_pdf}({counter}).pdf")
+                    counter += 1
+
+                self.pdf.output(pdf_file)
 
             self.pdf = None
             thread_pdf = threading.Thread(target=self.make_pdf())
@@ -1153,7 +1197,7 @@ class ProgressionThread(QThread):
     Needed to let the mainthread handle all the relavant windows and updating of plot (otherwise not possible)
     """
     progress = Signal(int)
-    pdf_ready_image = Signal(int, list, list, list, list, list)
+    pdf_ready_image = Signal(int, list, list, list, list, list, tuple)
     finished_file = Signal()
     error_occurred = Signal(str)
 
@@ -1196,7 +1240,8 @@ class ProgressionThread(QThread):
     def run(self):
         try:
             if self.pdf:
-                self.pdf.cell(0, 8, f"Total trials: {self.num_trials}", ln=True)
+                self.num_trials = self.count_active_tabs()
+                self.pdf.cell(0, 8, f"Total used trials: {self.num_trials}", ln=True)
 
             range_index = list(range(self.num_trials)) if self.index == -1 else [self.index]
             for i in range_index:
@@ -1249,14 +1294,108 @@ class ProgressionThread(QThread):
                 os.remove(trial_file)
             df.to_excel(trial_file, index=False)
             if self.pdf:
-                self.pdf.set_font("Arial", style="B", size=14)
-                self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()}' if tab.xs else ''}", ln=True)
-                self.pdf.set_font("Arial", size=12)
-                notes = tab.notes_input.toPlainText().strip()
-                self.pdf.multi_cell(0, 10, notes if notes else "No Notes")
+                current_y = self.pdf.get_y()
+                page_height = self.pdf.h - 20  # margin
+                available_space = page_height - current_y
+
+                if available_space < 40:
+                    self.pdf.add_page()
+                    self.y_image = self.pdf.get_y()
+
+                self.pdf.set_font("Arial", style="B", size=13)
+                if tab.case_status in [0, 5]:
+                    box_hand = 'Left'
+                elif tab.case_status in [1, 4]:
+                    box_hand = 'Right'
+                else:
+                    box_hand = 'Both'
+                self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()} & Box Hand: {box_hand}' if tab.xs else ''}", ln=True)
+                self.pdf.set_font("Arial", size=10)
+
+                doc = tab.notes_input.document()
+                block = doc.begin()
+
+                black_fragments = []
+                red_fragments = []
+
+                while block.isValid():
+                    cursor = QTextCursor(block)
+                    if cursor.currentTable() is None:
+                        fmt = cursor.charFormat()
+                        color = fmt.foreground().color()
+                        text = block.text()
+
+                        if color == QColor(Qt.red):
+                            red_fragments.append(text)
+                        else:
+                            black_fragments.append(text)
+
+                    block = block.next()
+
+                filtered_red_fragments = [fram for fram in red_fragments if fram.strip() != '']
+                filtered_black_fragments = [fram for fram in black_fragments if fram.strip() != '']
+
+                if filtered_red_fragments:
+                    red_text = "\n".join(filtered_red_fragments)
+                else:
+                    red_text = "No Automatic Notes"
+                if filtered_black_fragments:
+                    black_text = "\n".join(filtered_black_fragments)
+                else:
+                    black_text = "No Additional Notes"
+
+                self.pdf.multi_cell(0, 6, black_text)
+
+                self.pdf.ln(5)
+
+                self.pdf.set_text_color(255, 0, 0)
+                self.pdf.multi_cell(0, 6, red_text)
+                self.pdf.set_text_color(0, 0, 0)
+
                 self.pdf.ln(5)
 
                 if tab.xs:
+                    events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
+
+                    self.pdf.set_font("Arial", style="B", size=11)
+                    self.pdf.cell(0, 10, 'Events', ln=True)
+
+                    col_widths = [10, 50, 20, 40, 40]
+                    self.pdf.set_font('Arial', '', 10)
+
+                    events_table = [
+                        ['', '', 'Frame', 'Absolute time (s)', 'Relative time (s)'],
+                        ['e1', 'Start BH', events[0], round(tab.xs[events[0]], 2), 0],
+                        ['e2', 'Start box opening', events[1], round(tab.xs[events[1]], 2), round(tab.xs[events[1]] - tab.xs[events[0]], 2)],
+                        ['e3', 'End box opening', events[2], round(tab.xs[events[2]], 2), round(tab.xs[events[2]] - tab.xs[events[0]], 2)],
+                        ['e4', 'Anticipation TH', events[3], round(tab.xs[events[3]], 2), round(tab.xs[events[3]] - tab.xs[events[0]], 2)],
+                        ['e5', 'Start movement to trigger', events[4], round(tab.xs[events[4]], 2)
+                            if tab.xs[events[3]] != tab.xs[events[4]] else '', round(tab.xs[events[4]] - tab.xs[events[0]], 2)
+                            if tab.xs[events[3]] != tab.xs[events[4]] else ''],
+                        ['e6', 'End of trial', events[5], round(tab.xs[events[5]], 2), round(tab.xs[events[5]] - tab.xs[events[0]], 2)],
+                    ]
+                    events_table = [[str(cell) if cell != '' else '' for cell in row] for row in events_table]
+
+                    line_height = 10
+                    self.pdf.set_fill_color(235, 235, 235)  # lichtgrijs
+                    self.pdf.set_text_color(0, 0, 0)
+
+                    for row_ind, row in enumerate(events_table):
+                        self.pdf.set_x(20)
+                        first_row = (row_ind == 0)
+
+                        for col_ind, datum in enumerate(row):
+                            fill = first_row or col_ind == 0
+                            align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
+                            style = 'B' if first_row or col_ind == 0 else ''
+                            self.pdf.set_font("Arial", style, size=10)
+                            self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
+
+                        self.pdf.ln(line_height)
+
+                    self.pdf.ln(5)
+
+                    count_imag = 0
                     for pos_index in self.checkboxes:
                         left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
                                      data["Left Sensor y (cm)"] if pos_index == 1 else
@@ -1270,7 +1409,8 @@ class ProgressionThread(QThread):
 
                         self.mutex.lock()
                         self.pdf_ready_image.emit(pos_index, tab.xs, left_data, right_data, events,
-                                                  tab.event_position)
+                                                  tab.event_position, (count_imag, len(self.checkboxes)))
+                        count_imag += 1
                         self.condition.wait(self.mutex)
                         self.mutex.unlock()
 
@@ -1287,11 +1427,11 @@ class ProgressionThread(QThread):
                                                                                                       tab.log_left,
                                                                                                       tab.log_right)
 
-                    self.pdf.set_font("Arial", style="B", size=12)
-                    self.pdf.cell(0, 10, 'Table', ln=True)
+                    self.pdf.set_font("Arial", style="B", size=11)
+                    self.pdf.cell(0, 10, 'Parameters', ln=True)
 
                     col_widths = [45, 60, 40]
-                    self.pdf.set_font('Arial', '', 12)
+                    self.pdf.set_font('Arial', '', 10)
 
                     data = [
                         ['', 'Parameter', 'Value'],
@@ -1324,7 +1464,7 @@ class ProgressionThread(QThread):
                             fill = first_row or col_ind == 0
                             align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
                             style = 'B' if first_row or col_ind == 0 else ''
-                            self.pdf.set_font("Arial", style, size=12)
+                            self.pdf.set_font("Arial", style, size=10)
                             self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
 
                         self.pdf.ln(line_height)
@@ -1370,25 +1510,26 @@ class ProgressionThread(QThread):
         average_uni_right = tuple([temp / right_counter if right_counter != 0 else 0 for temp in average_uni_right])
 
         col_widths = [45, 60, 40, 40]
-        self.pdf.set_font('Arial', '', 12)
+        self.pdf.set_font('Arial', '', 11)
 
         data = [
-            ['', 'Parameter', 'Average left', 'Average right'],
-            ['Bimanual', 'Total time', str(round(average_bim_left[0], 2)), str(round(average_bim_right[0], 2))],
-            ['', 'Temporal coupling', str(round(average_bim_left[1], 2)), str(round(average_bim_right[1], 2))],
-            ['', 'Movement overlap', str(round(average_bim_left[2], 2)), str(round(average_bim_right[2], 2))],
-            ['', 'Goal synchronization', str(round(average_bim_left[3], 2)), str(round(average_bim_right[3], 2))],
+            ['', 'Parameter', 'Average left (BH)', 'Average right (BH)'],
+            ['', 'Total trials', str(left_counter), str(right_counter)],
+            ['Bimanual', 'Total time (s)', str(round(average_bim_left[0], 2)), str(round(average_bim_right[0], 2))],
+            ['', 'Temporal coupling (/)', str(round(average_bim_left[1], 2)), str(round(average_bim_right[1], 2))],
+            ['', 'Movement overlap  (/)', str(round(average_bim_left[2], 2)), str(round(average_bim_right[2], 2))],
+            ['', 'Goal synchronization (/)', str(round(average_bim_left[3], 2)), str(round(average_bim_right[3], 2))],
 
-            ['Unimanual', 'Time box hand', str(round(average_uni_left[0], 2)), str(round(average_uni_right[0], 2))],
-            ['', 'Time 1e phase BH', str(round(average_uni_left[1], 2)), str(round(average_uni_right[1], 2))],
-            ['', 'Time 2e phase BH', str(round(average_uni_left[2], 2)), str(round(average_uni_right[2], 2))],
-            ['', 'Time trigger hand', str(round(average_uni_left[3], 2)), str(round(average_uni_right[3], 2))],
-            ['', 'Smoothness BH', str(round(average_uni_left[4], 2)), str(round(average_uni_right[4], 2))],
-            ['', 'Smoothness TH', str(round(average_uni_left[5], 2)), str(round(average_uni_right[5], 2))],
-            ['', 'Path length BH', str(round(average_uni_left[6], 2)), str(round(average_uni_right[6], 2))],
-            ['', 'Path 1e phase BH', str(round(average_uni_left[7], 2)), str(round(average_uni_right[7], 2))],
-            ['', 'Path 2e phase BH', str(round(average_uni_left[8], 2)), str(round(average_uni_right[8], 2))],
-            ['', 'Path length TH', str(round(average_uni_left[9], 2)), str(round(average_uni_right[9], 2))],
+            ['Unimanual', 'Time box hand (s)', str(round(average_uni_left[0], 2)), str(round(average_uni_right[0], 2))],
+            ['', 'Time 1e phase BH (s)', str(round(average_uni_left[1], 2)), str(round(average_uni_right[1], 2))],
+            ['', 'Time 2e phase BH (s)', str(round(average_uni_left[2], 2)), str(round(average_uni_right[2], 2))],
+            ['', 'Time trigger hand (s)', str(round(average_uni_left[3], 2)), str(round(average_uni_right[3], 2))],
+            ['', 'Smoothness BH (/)', str(round(average_uni_left[4], 2)), str(round(average_uni_right[4], 2))],
+            ['', 'Smoothness TH (/)', str(round(average_uni_left[5], 2)), str(round(average_uni_right[5], 2))],
+            ['', 'Path length BH (cm)', str(round(average_uni_left[6], 2)), str(round(average_uni_right[6], 2))],
+            ['', 'Path 1e phase BH (cm)', str(round(average_uni_left[7], 2)), str(round(average_uni_right[7], 2))],
+            ['', 'Path 2e phase BH (cm)', str(round(average_uni_left[8], 2)), str(round(average_uni_right[8], 2))],
+            ['', 'Path length TH (cm)', str(round(average_uni_left[9], 2)), str(round(average_uni_right[9], 2))],
         ]
 
         line_height = 10
@@ -1403,7 +1544,7 @@ class ProgressionThread(QThread):
                 fill = first_row or col_ind == 0
                 align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
                 style = 'B' if first_row or col_ind == 0 else ''
-                self.pdf.set_font("Arial", style, size=12)
+                self.pdf.set_font("Arial", style, size=11)
                 self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
 
             self.pdf.ln(line_height)

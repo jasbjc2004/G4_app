@@ -55,6 +55,7 @@ class ReadThread(QThread):
         self.speed2 = []
 
     def stop_current_reading(self):
+        print(len(self.tab.xs))
         self.tab = None
         self.start_time = None
         self.sensor_died = 10
@@ -79,8 +80,6 @@ class ReadThread(QThread):
                 #logging.error(e, exc_info=True)
                 print(f"Error in read_sensor_data: {e}")
                 time.sleep(0.5)
-
-            time.sleep(1/fs)
 
     def stop(self):
         self.stop_read = True
@@ -121,6 +120,7 @@ class ReadThread(QThread):
 
                     if line == '0':
                         self.tab.button_pressed = True
+                        print(len(self.tab.xs))
                 except serial.SerialException as e:
                     print(f"Failed to connect to COM3: {e}")
 

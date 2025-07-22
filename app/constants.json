@@ -2,7 +2,7 @@
     "General": {
         "MAX_TRIALS": 20,
         "SERIAL_BUTTON": true,
-        "USE_NEURAL_NET": true,
+        "USE_NEURAL_NET": false,
         "MAX_INTERFERENCE_SPEED": 20,
         "TIME_INTERFERENCE_SPEED": 0.3
     },
@@ -14,6 +14,7 @@
     },
     "Data-processing": {
         "ORDER_FILTER": 2,
+        "ORDER_EXTREMA": 10,
         "SPEED_FILTER": true,
         "MAX_HEIGHT_NEEDED": 2,
         "MAX_LENGTH_NEEDED": 2,
@@ -21,8 +22,8 @@
         "MIN_LENGTH_NEEDED": 3,
         "POSITION_BUTTON": [
             0,
-            15,
-            1.5
+            12,
+            4
         ],
         "THRESHOLD_BOTH_HANDS": 20,
         "THRESHOLD_CHANGED_HANDS_MEAS": 20,
