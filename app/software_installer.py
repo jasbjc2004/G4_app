@@ -24,7 +24,7 @@ def build_executable(
         '--name', name,
         '--onedir',
         '--windowed',  # No console window
-        '--collect-all=scipy'
+        #'--collect-all=scipy'
     ]
 
     if icon:

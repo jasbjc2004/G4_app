@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import QApplication, QSplashScreen
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    pixmap = QPixmap("./NEEDED/PICTURES/hands.ico")
+    pixmap = QPixmap(os.path.join(os.path.abspath("."), "NEEDED/PICTURES/hands.ico"))
     splash = QSplashScreen(pixmap)
     splash.show()
 
