@@ -2,7 +2,8 @@
     "General": {
         "MAX_TRIALS": 20,
         "SERIAL_BUTTON": true,
-        "USE_NEURAL_NET": false,
+        "USE_NEURAL_NET": true,
+        "LONG_CALIBRATION": true,
         "MAX_INTERFERENCE_SPEED": 20,
         "TIME_INTERFERENCE_SPEED": 0.3
     },
@@ -10,7 +11,8 @@
         "fs": 120,
         "fc": 10,
         "SENSORS_USED": 2,
-        "MAX_ATTEMPTS_CONNECT": 10
+        "MAX_ATTEMPTS_CONNECT": 10,
+        "CALIBRATION_CYCLE": 3
     },
     "Data-processing": {
         "ORDER_FILTER": 2,

@@ -3,6 +3,8 @@ import shutil
 import subprocess
 import sys
 
+from constants import NAME_APP
+
 """
 code to load all the important files and make an .exe from the main-file to a working project
 .exe can be found in the dist-directory
@@ -24,6 +26,13 @@ def build_executable(
         '--name', name,
         '--onedir',
         '--windowed',  # No console window
+        '--hidden-import=serial',
+        '--hidden-import=serial.tools',
+        '--hidden-import=serial.tools.list_ports',
+        '--collect-all=pyserial',
+        '--hidden-import=sensor_G4Track',
+        '--hidden-import=constants',
+        '--hidden-import=widget_settings'
         #'--collect-all=scipy'
     ]
 
@@ -56,7 +65,7 @@ def build_executable(
 
 
 def main():
-    app_name = 'final_test_software'
+    app_name = NAME_APP
     input("Are you sure you want to delete the previous app?")
 
     folders_to_remove = ["dist", "build", "__pycache__"]

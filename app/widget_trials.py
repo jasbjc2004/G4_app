@@ -1,4 +1,3 @@
-#import logging
 import random
 from math import sqrt
 
@@ -23,17 +22,11 @@ from data_processing import calculate_boxhand, calculate_e6, calculate_events, c
 
 from scipy import signal
 
+from logger import get_logbook
 from thread_reading import ReadThread
 from window_main_plot import MainWindow
 from widget_settings import manage_settings
 from constants import READ_SAMPLE, COLORS
-"""
-logging.basicConfig(
-    filename='logboek.txt',
-    level=logging.ERROR,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-"""
 
 
 class TrialState(Enum):
@@ -61,6 +54,8 @@ class TrailTab(QWidget):
         NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
 
         super().__init__(parent)
+        self.logger = get_logbook('widget_trials')
+
         self.case_status = -1
         self.scatter = []
         self.trial_number = trail_number
@@ -146,7 +141,7 @@ class TrailTab(QWidget):
 
         self.timer_plot = QTimer(self)
         self.timer_plot.timeout.connect(self.update_plot)
-        self.timer_plot.setInterval(20)
+        self.timer_plot.setInterval(50)
 
     def signal_text_changed(self):
         main_window = self.window()
@@ -353,7 +348,7 @@ class TrailTab(QWidget):
                 self.first_event_guess = True
                 self.calculate_events(False, True)
             except Exception as e:
-                #logging.error(e, exc_info=True)
+                self.logger.error(e, exc_info=True)
                 NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
                 self.event_log = [0] * NUMBER_EVENTS
@@ -387,7 +382,7 @@ class TrailTab(QWidget):
                 self.first_event_guess = True
                 self.calculate_events(False, True)
             except Exception as e:
-                #logging.error(e, exc_info=True)
+                self.logger.error(e, exc_info=True)
                 NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
                 QMessageBox.critical(self, "Error", f"Failed to get new events!")
                 self.event_log = [0] * NUMBER_EVENTS
@@ -470,21 +465,45 @@ class TrailTab(QWidget):
                 main_window.update_toolbar()
 
     def remove_added_text(self):
-        cursor = self.notes_input.textCursor()
-        cursor.beginEditBlock()
+        doc = self.notes_input.document()
+        block = doc.begin()
+        end_text = 0
 
-        cursor.movePosition(QTextCursor.Start)
+        while block.isValid():
+            cursor = QTextCursor(block)
+            table = cursor.currentTable()
+            if table:
+                start = table.firstCursorPosition()
+                end = table.lastCursorPosition()
 
-        while not cursor.atEnd():
-            cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor)
-
-            char_color = cursor.charFormat()
-            if char_color.foreground().color() == QColor(Qt.red):
+                cursor.setPosition(start.position())
+                cursor.setPosition(end.position(), QTextCursor.KeepAnchor)
                 cursor.removeSelectedText()
-            else:
-                cursor.movePosition(QTextCursor.Right)
+                cursor.deleteChar()
+                block = doc.begin()
+                continue
 
-        cursor.endEditBlock()
+            fmt = cursor.charFormat()
+            color = fmt.foreground().color()
+
+            if color == QColor(Qt.red):
+                start = block.position()
+                end = block.position() + block.length()
+
+                cursor.setPosition(start)
+                cursor.setPosition(end, QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+                cursor.deleteChar()
+
+                block = doc.begin()
+
+            if block.text().strip() != '':
+                end_text = block.position() + block.length()
+
+            block = block.next()
+
+        cursor = QTextCursor(doc)
+        cursor.setPosition(end_text)
         self.notes_input.setTextCursor(cursor)
 
     def xt_plot(self):

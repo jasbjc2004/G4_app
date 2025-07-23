@@ -2,6 +2,7 @@
 
 READ_SAMPLE = False
 BEAUTY_SPEED = True
+NAME_APP = 'Bimanual Hand Movement'
 #SERIAL_BUTTON = True
 
 #MAX_ATTEMPTS_CONNECT = 10

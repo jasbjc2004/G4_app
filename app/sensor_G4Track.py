@@ -10,6 +10,8 @@ file_directory = os.path.dirname(os.path.abspath(__file__))
 G4Track = ct.CDLL(os.path.join(file_directory, "NEEDED/FILES/G4Track.dll"))
 G4_sensors_per_hub = 3
 
+HUBS = 1
+
 
 class G4SensorFrameData(ct.Structure):
     """
@@ -268,6 +270,11 @@ def close_sensor():
     del G4Track
 
 
+# Added so the reading happens faster -> not need to allocate data every cycle
+HUB_ID_ARRAY = (ct.c_int * HUBS)()
+FRAME_DATA = G4FrameData()
+
+
 def get_frame_data(system_id, hub_id_list):
     """
     Enables the program to retrieve position & orientation from the hub (single frame, watch out with 120 Hz)
@@ -279,9 +286,10 @@ def get_frame_data(system_id, hub_id_list):
      and a number of hubs worth of data returned in the fd (default set to 1)
     :rtype: (G4FrameData, int, int)
     """
-    fd = G4FrameData()
-    hub_id_c = (ct.c_int * len(hub_id_list))(*hub_id_list)
-    res = g4_get_frame_data(ct.byref(fd), ct.c_int(system_id), hub_id_c, 1)
+    fd = FRAME_DATA
+    for i, hub_id in enumerate(hub_id_list):
+        HUB_ID_ARRAY[i] = hub_id
+    res = g4_get_frame_data(ct.byref(fd), ct.c_int(system_id), HUB_ID_ARRAY, HUBS)
 
     res = res & 0xFFFFFFFF
     active_hubs = (res >> 16) & 0xFFFF

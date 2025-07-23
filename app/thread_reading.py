@@ -2,15 +2,16 @@
 import random
 import time
 
-import numpy as np
 import serial
 from PySide6.QtCore import QThread, Signal
 
+from logger import get_logbook
 from sensor_G4Track import get_frame_data
 from constants import READ_SAMPLE, BEAUTY_SPEED
 from widget_settings import manage_settings
 
 fs = manage_settings.get("Sensors", "fs")
+f_reading = 130
 SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
 MAX_INTERFERENCE_SPEED = manage_settings.get("General", "MAX_INTERFERENCE_SPEED")
 TIME_INTERFERENCE_SPEED = manage_settings.get("General", "TIME_INTERFERENCE_SPEED")
@@ -42,6 +43,7 @@ class ReadThread(QThread):
         self.send_interference = False
         self.speed1 = []
         self.speed2 = []
+        self.logger = get_logbook('thread_reading')
 
     def start_tab_reading(self, tab):
         self.tab = tab
@@ -74,10 +76,12 @@ class ReadThread(QThread):
 
                 if self.tab is not None:
                     self.read_sensor_data()
+                    #time.sleep(1 / f_reading)
                 else:
                     self.keep_sensor_alive()
+                    time.sleep(3 / fs)
             except Exception as e:
-                #logging.error(e, exc_info=True)
+                self.logger.critical(f"Problem with reading the sensor data: {e}", exc_info=True)
                 print(f"Error in read_sensor_data: {e}")
                 time.sleep(0.5)
 
@@ -109,8 +113,6 @@ class ReadThread(QThread):
         if not (self.tab and main_window and isinstance(self.tab, TrailTab) and isinstance(main_window, MainWindow)):
             return
 
-        elapsed_time = time.time() - self.start_time
-
         try:
             if SERIAL_BUTTON and main_window.button_trigger is not None:
                 try:
@@ -122,7 +124,8 @@ class ReadThread(QThread):
                         self.tab.button_pressed = True
                         print(len(self.tab.xs))
                 except serial.SerialException as e:
-                    print(f"Failed to connect to COM3: {e}")
+                    self.logger.warning(f"Failed to connect to button: {e}", exc_info=True)
+                    print(f"Failed to connect to button: {e}")
 
             if not READ_SAMPLE:
                 if isinstance(main_window, MainWindow):
@@ -149,7 +152,7 @@ class ReadThread(QThread):
                     self.tab.xs.append(len(self.tab.xs) / fs)
                     self.tab.log_left.append(pos1)
                     self.tab.log_right.append(pos2)
-
+                    """
                     self.speed1.append(v1)
                     self.speed1 = self.speed1[-fs*TIME_INTERFERENCE_SPEED:]
                     self.speed2.append(v2)
@@ -160,45 +163,61 @@ class ReadThread(QThread):
                         print('here')
                         self.send_interference = True
                         self.interference.emit()
-
+                    """
             elif BEAUTY_SPEED:
-                elapsed_time = len(self.tab.xs) / fs
-                self.tab.xs.append(elapsed_time)
+                time.sleep(1/fs)
+                time_now = len(self.tab.xs) / fs
 
-                if elapsed_time < 5:
-                    pos1 = (0, 0, elapsed_time,)
-                    pos2 = (0, elapsed_time, 0,)
+                if time_now < 5:
+                    pos1 = (0, 0, -5*time_now,)
+                    pos2 = (0, 5*time_now, 0,)
 
-                elif elapsed_time < 10:
-                    pos1 = (0, 0, 5 - (elapsed_time - 5),)
-                    pos2 = (0, 5 - (elapsed_time - 5), 0,)
+                elif time_now < 10:
+                    pos1 = (0, 0, -25+5*(time_now-5),)
+                    pos2 = (0, 25-5*(time_now-5), 0,)
 
-                elif elapsed_time < 15:
-                    pos1 = (0, 0, 5 * (elapsed_time - 10),)
-                    pos2 = (0, 5 * (elapsed_time - 10), 0,)
+                elif time_now < 15:
+                    pos1 = (0, 0, -20 * (time_now - 10),)
+                    pos2 = (0, 20 * (time_now - 10), 0,)
 
-                elif elapsed_time < 20:
-                    pos1 = (0, 0, 25 - 5 * (elapsed_time - 15),)
-                    pos2 = (0, 25 - 5 * (elapsed_time - 15), 0,)
+                elif time_now < 20:
+                    pos1 = (0, 0, -100 + 20 * (time_now - 15),)
+                    pos2 = (0, 100 - 20 * (time_now - 15), 0,)
 
                 else:
                     pos1 = (0, 0, 0,)
                     pos2 = (0, 0, 0,)
 
-                self.tab.log_left.append(
-                    pos1 + (self.tab.speed_calculation(pos1, self.tab.xs[-1], len(self.tab.xs) - 1, True),))
-                self.tab.log_right.append(
-                    pos2 + (self.tab.speed_calculation(pos2, self.tab.xs[-1], len(self.tab.xs) - 1, False),))
+                pos1 = tuple([pos1[i] if i != 2 else -pos1[i] for i in range(3)])
+                v1 = self.tab.speed_calculation(pos1, time_now, len(self.tab.xs) - 1, True)
+                pos1 += (v1,)
+
+                pos2 = tuple([pos2[i] if i != 2 else -pos2[i] for i in range(3)])
+                v2 = self.tab.speed_calculation(pos2, time_now, len(self.tab.xs) - 1, False)
+                pos2 += (v2,)
+
+                self.tab.xs.append(len(self.tab.xs) / fs)
+                self.tab.log_left.append(pos1)
+                self.tab.log_right.append(pos2)
 
             else:
+                time.sleep(1 / fs)
+                time_now = len(self.tab.xs) / fs
+
                 pos1 = (random.randint(-20, 20), random.randint(0, 20), random.randint(-20, 0))
                 pos2 = (random.randint(-20, 20), random.randint(0, 20), random.randint(-20, 0))
 
-                self.tab.xs.append(elapsed_time)
-                self.tab.log_left.append(
-                    pos1 + (self.tab.speed_calculation(pos1, self.tab.xs[-1], len(self.tab.xs) - 1, True),))
-                self.tab.log_right.append(
-                    pos2 + (self.tab.speed_calculation(pos2, self.tab.xs[-1], len(self.tab.xs) - 1, False),))
+                pos1 = tuple([pos1[i] if i != 2 else -pos1[i] for i in range(3)])
+                v1 = self.tab.speed_calculation(pos1, time_now, len(self.tab.xs) - 1, True)
+                pos1 += (v1,)
+
+                pos2 = tuple([pos2[i] if i != 2 else -pos2[i] for i in range(3)])
+                v2 = self.tab.speed_calculation(pos2, time_now, len(self.tab.xs) - 1, False)
+                pos2 += (v2,)
+
+                self.tab.xs.append(len(self.tab.xs) / fs)
+                self.tab.log_left.append(pos1)
+                self.tab.log_right.append(pos2)
 
             if self.tab and self.tab.button_pressed:
                 self.stop_current_reading()

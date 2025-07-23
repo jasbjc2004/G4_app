@@ -3,6 +3,7 @@
 import numpy as np
 from scipy.signal import argrelextrema
 
+from logger import get_logbook
 from widget_settings import manage_settings
 from sensor_G4Track import *
 import time
@@ -26,6 +27,8 @@ logging.basicConfig(
 file_directory = (os.path.dirname(os.path.abspath(__file__)))
 model_dir = os.path.join(file_directory, 'scoring_model.keras')
 model = keras.models.load_model(model_dir)
+
+logger = get_logbook('data_processing')
 
 
 def calibration_to_center(sys_id):
@@ -108,7 +111,7 @@ def predict_score(pos_left, pos_right):
     except Exception as error:
         prediction = 0
         print(error)
-        #logging.error(error, exc_info=True)
+        logger.error(error, exc_info=True)
 
     print(prediction[0][0])
     print(round(prediction[0][0]))
@@ -319,7 +322,7 @@ def calculate_events(pos_left, pos_right, case, score):
 
         return e1, e2, e3, e4, e5
     except Exception as error:
-        #logging.error(error, exc_info=True)
+        logger.error(error, exc_info=True)
         return 0, 0, 0, 0, 0
 
 

@@ -1,6 +1,7 @@
 import json
 # import logging
 import os
+import sys
 
 from PySide6.QtCore import Qt, QRegularExpression
 from PySide6.QtGui import QIcon, QDoubleValidator, QValidator, QPixmap, \
@@ -9,7 +10,8 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLa
     QStackedWidget, QListWidgetItem, QWidget, QFrame, QLineEdit, QCheckBox, QMessageBox, QComboBox, \
     QGraphicsOpacityEffect
 
-from constants import COLORS
+from constants import COLORS, NAME_APP
+from logger import get_logbook
 
 """
 logging.basicConfig(
@@ -24,9 +26,23 @@ class SettingsManager:
     """Class to manage all the settings: loading at the beginning, applying changes and resetting to default"""
 
     def __init__(self, config_file='constants.json'):
-        file_directory = (os.path.dirname(os.path.abspath(__file__)))
-        self.config_file = os.path.join(file_directory, config_file)
+        if getattr(sys, 'frozen', False):
+            # Running as packaged executable
+            appdata_dir = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', NAME_APP)
+            os.makedirs(appdata_dir, exist_ok=True)
+            self.config_file = os.path.join(appdata_dir, config_file)
+        else:
+            # Running from source (PyCharm/development)
+            file_directory = os.path.dirname(os.path.abspath(__file__))
+            self.config_file = os.path.join(file_directory, config_file)
+
         self.settings = {}
+        self.logger = get_logbook('widget_settings')
+
+        # Create default settings if needed (only for packaged version)
+        if getattr(sys, 'frozen', False) and not os.path.exists(self.config_file):
+            self.create_default_settings()
+
         self.load_settings()
 
     def load_settings(self):
@@ -45,6 +61,7 @@ class SettingsManager:
                 "MAX_TRIALS": 20,
                 "SERIAL_BUTTON": True,
                 "USE_NEURAL_NET": True,
+                "LONG_CALIBRATION": True,
                 "MAX_INTERFERENCE_SPEED": 20,
                 "TIME_INTERFERENCE_SPEED": 0.3
             },
@@ -52,7 +69,8 @@ class SettingsManager:
                 "fs": 120,
                 "fc": 10,
                 "SENSORS_USED": 2,
-                "MAX_ATTEMPTS_CONNECT": 10
+                "MAX_ATTEMPTS_CONNECT": 10,
+                "CALIBRATION_CYCLE": 3
             },
             "Data-processing": {
                 "ORDER_FILTER": 2,
@@ -86,7 +104,7 @@ class SettingsManager:
             print(f"Settings saved to {self.config_file}")
             return True
         except Exception as e:
-            # logging.error(e, exc_info=True)
+            self.logger.error(e, exc_info=True)
             print(f"Error saving settings: {e}")
             return False
 

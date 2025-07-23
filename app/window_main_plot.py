@@ -19,6 +19,7 @@ from PySide6.QtCore import QSize, Signal, QThread, QMutex, QWaitCondition, Qt
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
 
+from logger import get_logbook
 from sensor_G4Track import initialize_system, set_units, get_active_hubs, close_sensor
 from data_processing import calibration_to_center, calculate_boxhand, calculate_position_events, \
     calculate_extra_parameters, predict_score
@@ -29,20 +30,13 @@ from thread_reading import ReadThread
 from widget_settings import manage_settings
 from constants import READ_SAMPLE
 
-"""
-logging.basicConfig(
-    filename='logboek.txt',
-    level=logging.ERROR,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-"""
-
 
 class MainWindow(QMainWindow):
     def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False, save=None):
         super().__init__()
 
         self.button_trigger = None
+        self.logger = get_logbook('window_main_plot')
 
         self.setWindowTitle(id)
         file_directory = (os.path.dirname(os.path.abspath(__file__)))
@@ -760,7 +754,6 @@ class MainWindow(QMainWindow):
     def calibration(self):
         """
         Calibrate the sensor with calibration_to_center(sys_id) of data_processing
-        :return:
         """
         ret = QMessageBox.Cancel
         if not self.first_calibration:
@@ -787,6 +780,13 @@ class MainWindow(QMainWindow):
                     QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
             else:
                 self.first_calibration = False
+                """
+                CALIBRATION_CYCLE = manage_settings.get("Sensors", "CALIBRATION_CYCLE") - 1
+                while CALIBRATION_CYCLE >= 1:
+                    hub_id, lindex, rindex, calibration_status = calibration_to_center(self.dongle_id)
+                    if calibration_status:
+                        self.hub_id, self.lindex, self.rindex = hub_id, lindex, rindex
+                """
                 self.update_toolbar()
                 QMessageBox.information(self, "Success", "Successfully calibrated to sensors!")
                 self.data_thread.start()
@@ -1138,7 +1138,7 @@ class MainWindow(QMainWindow):
                 self.pdf.set_y(self.y_image + total_height)
 
         except Exception as e:
-            #logging.error(e, exc_info=True)
+            self.logger.error(e, exc_info=True)
             print(str(e))
         finally:
             buf.close()
@@ -1154,7 +1154,7 @@ class MainWindow(QMainWindow):
         self.progression.show()
 
     def show_error(self, e):
-        #logging.error(e, exc_info=True)
+        self.logger.error(e, exc_info=True)
         self.progression.close()
         QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
 
