@@ -61,16 +61,21 @@ class SettingsManager:
                 "MAX_TRIALS": 20,
                 "SERIAL_BUTTON": True,
                 "USE_NEURAL_NET": True,
-                "LONG_CALIBRATION": True,
                 "MAX_INTERFERENCE_SPEED": 20,
                 "TIME_INTERFERENCE_SPEED": 0.3
+            },
+            "Calibration": {
+                "LONG_CALIBRATION": True,
+                "POSITION_BUTTON": [0, 15.2, 2.3],
+                "SIZE_BASE_BOX": [12.9, 9.7],
+                "THRESHOLD_CALIBRATION": 0.01,
+                "MAX_ATTEMPTS_CALIBRATION": 5
             },
             "Sensors": {
                 "fs": 120,
                 "fc": 10,
                 "SENSORS_USED": 2,
                 "MAX_ATTEMPTS_CONNECT": 10,
-                "CALIBRATION_CYCLE": 3
             },
             "Data-processing": {
                 "ORDER_FILTER": 2,
@@ -80,13 +85,10 @@ class SettingsManager:
                 "MAX_LENGTH_NEEDED": 2,
                 "MIN_HEIGHT_NEEDED": 3,
                 "MIN_LENGTH_NEEDED": 3,
-                "POSITION_BUTTON": [0, 12, 4],
                 "THRESHOLD_BOTH_HANDS": 20,
                 "THRESHOLD_CHANGED_HANDS_MEAS": 20,
                 "SPEED_THRESHOLD": 0.05,
                 "HEIGHT_BOX": 15,
-                "THRESHOLD_CALIBRATION": 0.01,
-                "MAX_ATTEMPTS_CALIBRATION": 5
             },
             "Events": {
                 "NUMBER_EVENTS": 6,
@@ -150,7 +152,7 @@ class Settings(QDialog):
         self.list_widget = QListWidget()
         self.list_widget.setFixedWidth(150)
 
-        menu = ['General', 'Sensors', 'Data-processing', 'Events']
+        menu = ['General', "Calibration", 'Sensors', 'Data-processing', 'Events']
         for tab in menu:
             QListWidgetItem(tab, self.list_widget)
 

@@ -1,4 +1,4 @@
-#import logging
+# import logging
 
 import numpy as np
 from scipy.signal import argrelextrema
@@ -7,6 +7,7 @@ from logger import get_logbook
 from widget_settings import manage_settings
 from sensor_G4Track import *
 import time
+from scipy.spatial.transform import Rotation as R
 
 from tensorflow import keras
 
@@ -31,73 +32,282 @@ model = keras.models.load_model(model_dir)
 logger = get_logbook('data_processing')
 
 
-def calibration_to_center(sys_id):
-    """
-    Calibrate the system (facing the source), so the x-axis points to the right of the user, the y-axis to the front
-    and the z-axis to the floor. Keep in mind that the hemisphere of the source is dynamic and needs time to adapt.
-    :param sys_id: system id
-    :type sys_id: int
-    :return: the sensor who is on the left and right hand
-    :rtype: int, int, int, bool
-    """
-    MAX_ATTEMPTS_CALIBRATION = manage_settings.get("Data-processing", "MAX_ATTEMPTS_CALIBRATION")
-    THRESHOLD_CALIBRATION = manage_settings.get("Data-processing", "THRESHOLD_CALIBRATION")
-    attempt = 0
+class Calibration:
+    def __init__(self, sys_id):
+        """
+        :param sys_id: system id
+        :type sys_id: int
+        """
+        self.sys_id = sys_id
+        self.less_precise_center = (0, 0, 0)
+        self.button_pos_sen = [0, 0, 0]
+        self.left_corner_pos_sen = [0, 0, 0]
+        self.right_corner_pos_sen = [0, 0, 0]
+        self.hub_id = get_active_hubs(self.sys_id, True)[0]
+        self.station_map = get_station_map(self.sys_id, self.hub_id)
 
-    while attempt < MAX_ATTEMPTS_CALIBRATION:
-        frame_reference_orientation_reset(sys_id)
-        frame_reference_translation_reset(sys_id)
+    def calibration_to_center(self):
+        """
+        Calibrate the system (facing the source), so the x-axis points to the right of the user, the y-axis to the front
+        and the z-axis to the floor. Keep in mind that the hemisphere of the source is dynamic and needs time to adapt.
+        :return: the sensor who is on the left and right hand
+        :rtype: int, int, int, bool
+        """
+        MAX_ATTEMPTS_CALIBRATION = manage_settings.get("Calibration", "MAX_ATTEMPTS_CALIBRATION")
+        THRESHOLD_CALIBRATION = manage_settings.get("Calibration", "THRESHOLD_CALIBRATION")
+        attempt = 0
 
-        # set_units(sys_id)
-        time.sleep(2)  # wait for the hemisphere to adapt
-        hub_id = get_active_hubs(sys_id, True)[0]
-        station_map = get_station_map(sys_id, hub_id)
+        while attempt < MAX_ATTEMPTS_CALIBRATION:
+            frame_reference_orientation_reset(self.sys_id)
+            frame_reference_translation_reset(self.sys_id)
+
+            # set_units(self.sys_id)
+            time.sleep(1.5)  # wait for the hemisphere to adapt
+
+            active_count, data_hubs = 0, 0
+            while (active_count, data_hubs) != (1, 1):
+                pos0, active_count, data_hubs = get_frame_data(self.sys_id, [self.hub_id])
+                if active_count == 0 or data_hubs == 0:
+                    time.sleep(0.1)
+                    continue
+
+            pos_ports = [i for i in range(0, len(self.station_map)) if self.station_map[i]]
+            sen1 = pos0.G4_sensor_per_hub[pos_ports[0]]
+            sen2 = pos0.G4_sensor_per_hub[pos_ports[1]]
+
+            # Find reference using the axis on the source
+            self.less_precise_center = (max(sen1.pos[0], sen2.pos[0]), (sen1.pos[1] + sen2.pos[1]) / 2,
+                                        min(sen1.pos[2], sen2.pos[2]))
+            frame_reference_translation(self.sys_id, (max(sen1.pos[0], sen2.pos[0]),
+                                                      (sen1.pos[1] + sen2.pos[1]) / 2,
+                                                      min(sen1.pos[2], sen2.pos[2])))
+
+            frame_reference_orientation(self.sys_id, (90, 180, 0))
+
+            if sen1.pos[1] < sen2.pos[1]:
+                lsen, rsen = pos_ports[0], pos_ports[1]
+            else:
+                lsen, rsen = pos_ports[1], pos_ports[0]
+
+            time.sleep(1.5)
+
+            pos0, active_count, data_hubs = None, 0, 0
+            while active_count == 0 & data_hubs == 0:
+                pos0, active_count, data_hubs = get_frame_data(self.sys_id, [self.hub_id])
+
+            pos_left = list(pos0.G4_sensor_per_hub[lsen].pos)
+            pos_right = list(pos0.G4_sensor_per_hub[rsen].pos)
+
+            print(abs(abs(pos_left[0]) - pos_right[0]))
+            if abs(abs(pos_left[0]) - pos_right[0]) == 0:
+                return 0, 0, 0, False
+
+            print(f"sensor: {pos_left, pos_right}")
+
+            time.sleep(1.5)
+            if abs(abs(pos_left[0]) - pos_right[0]) < THRESHOLD_CALIBRATION:
+                print(frame_reference_translation(self.sys_id))
+                return self.hub_id, lsen, rsen, True
+
+            attempt += 1
+
+        return None, None, None, False
+
+    def precise_rotation(self, phase):
+        """
+        Calibrate the orientation system (facing the source) using the sensor, so the x-axis points to the right of
+        the user, the y-axis to the front and the z-axis to the floor. Keep in mind that the hemisphere of the
+        source is dynamic and needs time to adapt.
+        """
+        frame_reference_orientation_reset(self.sys_id)
+        time.sleep(0.5)
+
+        POSITION_BUTTON = manage_settings.get("Calibration", "POSITION_BUTTON")
+        SIZE_BASE_BOX = manage_settings.get("Calibration", "SIZE_BASE_BOX")
+
+        if phase == 0:
+            active_count, data_hubs = 0, 0
+            while (active_count, data_hubs) != (1, 1):
+                pos0, active_count, data_hubs = get_frame_data(self.sys_id, [self.hub_id])
+                if active_count == 0 or data_hubs == 0:
+                    time.sleep(0.1)
+                    continue
+
+            pos_ports = [i for i in range(0, len(self.station_map)) if self.station_map[i]]
+            sen1 = pos0.G4_sensor_per_hub[pos_ports[0]]
+            sen2 = pos0.G4_sensor_per_hub[pos_ports[1]]
+
+            if abs(POSITION_BUTTON[1] - sen1.pos[0]) < abs(POSITION_BUTTON[1] - sen2.pos[0]):
+                button_sensor = pos_ports[0]
+            else:
+                button_sensor = pos_ports[1]
+
+            self.button_pos_sen = list(pos0.G4_sensor_per_hub[button_sensor].pos)
+            return
+
+        elif phase == 1:
+            active_count, data_hubs = 0, 0
+            while (active_count, data_hubs) != (1, 1):
+                pos0, active_count, data_hubs = get_frame_data(self.sys_id, [self.hub_id])
+                if active_count == 0 or data_hubs == 0:
+                    time.sleep(0.1)
+                    continue
+
+            pos_ports = [i for i in range(0, len(self.station_map)) if self.station_map[i]]
+            sen1 = pos0.G4_sensor_per_hub[pos_ports[0]]
+            sen2 = pos0.G4_sensor_per_hub[pos_ports[1]]
+
+            if abs(POSITION_BUTTON[1] - SIZE_BASE_BOX[1] / 2 - sen1.pos[0]) < abs(
+                    POSITION_BUTTON[1] - SIZE_BASE_BOX[1] / 2 - sen2.pos[0]):
+                left_corner_sensor = pos_ports[0]
+            else:
+                left_corner_sensor = pos_ports[1]
+
+            self.left_corner_pos_sen = list(pos0.G4_sensor_per_hub[left_corner_sensor].pos)
+            return
+
+        elif phase == 2:
+            active_count, data_hubs = 0, 0
+            while (active_count, data_hubs) != (1, 1):
+                pos0, active_count, data_hubs = get_frame_data(self.sys_id, [self.hub_id])
+                if active_count == 0 or data_hubs == 0:
+                    time.sleep(0.1)
+                    continue
+
+            pos_ports = [i for i in range(0, len(self.station_map)) if self.station_map[i]]
+            sen1 = pos0.G4_sensor_per_hub[pos_ports[0]]
+            sen2 = pos0.G4_sensor_per_hub[pos_ports[1]]
+
+            if abs(POSITION_BUTTON[1] - SIZE_BASE_BOX[1] / 2 - sen1.pos[0]) < abs(
+                    POSITION_BUTTON[1] - SIZE_BASE_BOX[1] / 2 - sen2.pos[0]):
+                right_corner_sensor = pos_ports[0]
+            else:
+                right_corner_sensor = pos_ports[1]
+
+            self.right_corner_pos_sen = list(pos0.G4_sensor_per_hub[right_corner_sensor].pos)
+
+            x_axis = np.array(self.right_corner_pos_sen) - np.array(self.left_corner_pos_sen)
+            x_axis = x_axis / np.linalg.norm(x_axis)
+
+            pos_ground = self.button_pos_sen.copy()
+            pos_ground[2] -= POSITION_BUTTON[2]
+
+            z_axis = - np.array(self.button_pos_sen) + np.array(pos_ground)
+            z_axis = z_axis / np.linalg.norm(z_axis)
+
+            y_axis = np.cross(z_axis, x_axis)
+            y_axis = y_axis / np.linalg.norm(y_axis)
+
+            rot = R.from_matrix(np.array([x_axis, y_axis, z_axis]))
+            euler = rot.as_euler('zyx', degrees=True)  # of 'xyz', afhankelijk van jouw conventie
+
+            print("Euler-hoeken:", euler)
+            frame_reference_orientation(self.sys_id, tuple(euler))
+            time.sleep(0.25)
+
+    def calibration_to_button_first_phase(self):
+        """
+        Calibrate the translation of the system (facing the source) using the sensor, so the x-axis points to the right
+        of the user, the y-axis to the front and the z-axis to the floor. Keep in mind that the hemisphere of the
+        source is dynamic and needs time to adapt.
+        :return: a boolean to check if the second calibration worked
+        :rtype: bool
+        """
+        MAX_ATTEMPTS_CALIBRATION = manage_settings.get("Calibration", "MAX_ATTEMPTS_CALIBRATION")
+        THRESHOLD_CALIBRATION = manage_settings.get("Calibration", "THRESHOLD_CALIBRATION")
+        POSITION_BUTTON = manage_settings.get("Calibration", "POSITION_BUTTON")
+        attempt = 0
+
+        while attempt < MAX_ATTEMPTS_CALIBRATION:
+            print(attempt+1)
+            start_pos = frame_reference_translation(self.sys_id)
+            print(start_pos)
+
+            if attempt == 0:
+                pos0 = None
+                while pos0 is None:
+                    pos0, active_count, data_hubs = get_frame_data(self.sys_id, [self.hub_id])
+                    if active_count == 0 or data_hubs == 0:
+                        time.sleep(0.1)
+                        continue
+
+                pos_ports = [i for i in range(0, len(self.station_map)) if self.station_map[i]]
+                sen1 = pos0.G4_sensor_per_hub[pos_ports[0]]
+                sen2 = pos0.G4_sensor_per_hub[pos_ports[1]]
+
+                if abs(POSITION_BUTTON[1] - sen1.pos[1]) < abs(POSITION_BUTTON[1] - sen2.pos[1]):
+                    button_sensor = pos_ports[0]
+                else:
+                    button_sensor = pos_ports[1]
+
+                print(list(sen1.pos), list(sen2.pos))
+                print(list(pos0.G4_sensor_per_hub[button_sensor].pos))
+
+            active_count, data_hubs = 0, 0
+            while (active_count, data_hubs) != (1, 1):
+                pos0, active_count, data_hubs = get_frame_data(self.sys_id, [self.hub_id])
+                if active_count == 0 or data_hubs == 0:
+                    time.sleep(0.1)
+                    continue
+
+            button_pos_sen = list(pos0.G4_sensor_per_hub[button_sensor].pos)
+            print(button_pos_sen)
+            diff = (POSITION_BUTTON[0] - button_pos_sen[0], POSITION_BUTTON[1] - button_pos_sen[1],
+                    (POSITION_BUTTON[2]) - (-button_pos_sen[2]-2))
+            # extra height because of sensor's height
+
+            print(f'first phase: {diff}')
+            if all(abs(xyz) < THRESHOLD_CALIBRATION for xyz in diff):
+                return True
+
+            new_rel_pos = (start_pos[0] - diff[1], start_pos[1] - diff[0], start_pos[2] - diff[2])
+
+            print('\n')
+            print(start_pos)
+            print(diff)
+            print(new_rel_pos)
+            print('\n')
+
+            frame_reference_translation(self.sys_id, new_rel_pos)
+            time.sleep(0.1)
+
+            attempt += 1
+
+        frame_reference_translation(self.sys_id, self.less_precise_center)
+        return False
+
+    def calibration_to_button_second_phase(self):
+        """
+        Calibrate the system (facing the source) using the sensor, so the x-axis points to the right of the user, the y-axis to the front
+        and the z-axis to the floor. Keep in mind that the hemisphere of the source is dynamic and needs time to adapt.
+        :return: a boolean to check if the second calibration worked
+        :rtype: bool
+        """
+        THRESHOLD_CALIBRATION = manage_settings.get("Calibration", "THRESHOLD_CALIBRATION") * 30
+        POSITION_BUTTON = manage_settings.get("Calibration", "POSITION_BUTTON")
 
         pos0 = None
         while pos0 is None:
-            pos0, active_count, data_hubs = get_frame_data(sys_id, [hub_id])
+            pos0, active_count, data_hubs = get_frame_data(self.sys_id, [self.hub_id])
             if active_count == 0 or data_hubs == 0:
                 time.sleep(0.1)
                 continue
 
-        pos_ports = [i for i in range(0, len(station_map)) if station_map[i]]
+        pos_ports = [i for i in range(0, len(self.station_map)) if self.station_map[i]]
         sen1 = pos0.G4_sensor_per_hub[pos_ports[0]]
         sen2 = pos0.G4_sensor_per_hub[pos_ports[1]]
 
-        # Find reference using the axis on the source
-        frame_reference_translation(sys_id, (max(sen1.pos[0], sen2.pos[0]),
-                                             (sen1.pos[1] + sen2.pos[1]) / 2,
-                                             min(sen1.pos[2], sen2.pos[2])))
-
-        frame_reference_orientation(sys_id, (90, 180, 0))
-
-        if sen1.pos[1] < sen2.pos[1]:
-            lsen, rsen = pos_ports[0], pos_ports[1]
+        if abs(POSITION_BUTTON[1] - sen1.pos[1]) < abs(POSITION_BUTTON[1] - sen2.pos[1]):
+            button_sensor = sen1
         else:
-            lsen, rsen = pos_ports[1], pos_ports[0]
+            button_sensor = sen2
 
-        time.sleep(2)
+        diff = (POSITION_BUTTON[0] - button_sensor.pos[0], POSITION_BUTTON[1] - button_sensor.pos[1],
+                (POSITION_BUTTON[2]) - (-button_sensor.pos[2] - 2))
+        # extra height because of sensor's height
+        print(f'second phase: {diff}')
 
-        pos0, active_count, data_hubs = None, 0, 0
-        while active_count == 0 & data_hubs == 0:
-            pos0, active_count, data_hubs = get_frame_data(sys_id, [hub_id])
-
-        pos_left = list(pos0.G4_sensor_per_hub[lsen].pos)
-        pos_right = list(pos0.G4_sensor_per_hub[rsen].pos)
-
-        print(abs(abs(pos_left[0]) - pos_right[0]))
-        if abs(abs(pos_left[0]) - pos_right[0]) == 0:
-            return 0, 0, 0, False
-
-        print(f"sensor: {pos_left, pos_right}")
-
-        time.sleep(2)
-        if abs(abs(pos_left[0]) - pos_right[0]) < THRESHOLD_CALIBRATION:
-            return hub_id, lsen, rsen, True
-
-        attempt += 1
-
-    return None, None, None, False
+        return all(abs(xyz) < THRESHOLD_CALIBRATION for xyz in diff)
 
 
 def predict_score(pos_left, pos_right):
@@ -135,7 +345,7 @@ def calculate_boxhand(pos_left, pos_right, score=-1):
         7 if the hands switched, but left pressed
     """
     MAX_HEIGHT_NEEDED = manage_settings.get("Data-processing", "MAX_HEIGHT_NEEDED")
-    POSITION_BUTTON = manage_settings.get("Data-processing", "POSITION_BUTTON")
+    POSITION_BUTTON = manage_settings.get("Calibration", "POSITION_BUTTON")
     MAX_LENGTH_NEEDED = manage_settings.get("Data-processing", "MAX_LENGTH_NEEDED")
     MIN_HEIGHT_NEEDED = manage_settings.get("Data-processing", "MIN_HEIGHT_NEEDED")
     MIN_LENGTH_NEEDED = manage_settings.get("Data-processing", "MIN_LENGTH_NEEDED")
@@ -199,16 +409,19 @@ def calculate_boxhand(pos_left, pos_right, score=-1):
             counter_left = 7 * len(pos_left) / 8
             counter_right = 7 * len(pos_right) / 8
             for i in range(-1, -len(pos_left), -1):
-                if pos_left[i][2] < MAX_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] < MAX_LENGTH_NEEDED + start_left[1]:
+                if pos_left[i][2] < MAX_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] < MAX_LENGTH_NEEDED + \
+                        start_left[1]:
                     counter_left -= 1
                 if pos_right[i][2] < MAX_HEIGHT_NEEDED + start_right[2] and \
                         pos_right[i][1] < MAX_LENGTH_NEEDED + start_right[1]:
                     counter_right -= 1
 
-                if pos_left[i][2] > MIN_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] > MIN_LENGTH_NEEDED + start_left[1]:
+                if pos_left[i][2] > MIN_HEIGHT_NEEDED + start_left[2] and pos_left[i][1] > MIN_LENGTH_NEEDED + \
+                        start_left[1]:
                     counter_left += 1 * len(pos_left) / 6
-                if pos_right[i][2] > MIN_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] > MIN_LENGTH_NEEDED + start_right[
-                    1]:
+                if pos_right[i][2] > MIN_HEIGHT_NEEDED + start_right[2] and pos_right[i][1] > MIN_LENGTH_NEEDED + \
+                        start_right[
+                            1]:
                     counter_right += 1 * len(pos_left) / 6
 
             if counter_left <= 0:
@@ -383,30 +596,30 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     tt = (e6 - min(e1, e4)) / fs
 
     # temp coupling = start trigger hand - start second phase of box opening hand ??
-    temp_coupling = ((e4 - e2) / fs)/tt
+    temp_coupling = ((e4 - e2) / fs) / tt
 
     # movement overlap = end lid opening - start trigger hand
-    mov_overlap = ((e3 - e4) / fs)/tt
+    mov_overlap = ((e3 - e4) / fs) / tt
 
     # goal synchronization = trigger press - end lid opening
-    goal_sync = ((e6 - e3) / fs)/tt
+    goal_sync = ((e6 - e3) / fs) / tt
 
     # unimanuele parameters
     # time box hand = end lid opening - start box hand
-    t_bh = ((e3 - e1) / fs)/tt
+    t_bh = ((e3 - e1) / fs) / tt
 
     # time 1st phase of box hand = start opening box - start of box hand
-    t_bh_p1 = ((e2 - e1) / fs)/tt
+    t_bh_p1 = ((e2 - e1) / fs) / tt
 
     # time 2nd phase of box hand = end of box hand - start opening box
-    t_bh_p2 = ((e3 - e2) / fs)/tt
+    t_bh_p2 = ((e3 - e2) / fs) / tt
 
     # time trigger hand = trigger press - start trigger hand
     # rekening houden met e4 en e5
-    t_th = ((e6 - e4) / fs)/tt
+    t_th = ((e6 - e4) / fs) / tt
 
     # if start / endpoint is also a max => not taken into account. if need => first local max of b then sum in range e1: e3
-    subset = bv[e1:e3+1]
+    subset = bv[e1:e3 + 1]
 
     max_bh = argrelextrema(subset, np.greater)[0]
     min_bh = argrelextrema(subset, np.less)[0]
@@ -414,7 +627,7 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     # Count the number of local extrema
     smooth_bh = len(max_bh) + len(min_bh)
 
-    subset_t = tv[e4:e6+1]
+    subset_t = tv[e4:e6 + 1]
 
     max_th = argrelextrema(subset_t, np.greater, order=ORDER_EXTREMA)[0]
     min_th = argrelextrema(subset_t, np.less, order=ORDER_EXTREMA)[0]
@@ -423,9 +636,9 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     smooth_th = len(max_th) + len(min_th)
 
     # path-length of box hand (d=distance)
-    dbx = bx[e1:e3+1]
-    dby = by[e1:e3+1]
-    dbz = bz[e1:e3+1]
+    dbx = bx[e1:e3 + 1]
+    dby = by[e1:e3 + 1]
+    dbz = bz[e1:e3 + 1]
 
     dbx = np.diff(dbx)
     dby = np.diff(dby)
@@ -435,9 +648,9 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     d_bh = np.sum(d_bh)
 
     # path-length of box hand - eerste fase tot aan de doos
-    dbx_p1 = bx[e1:e2+1]
-    dby_p1 = by[e1:e2+1]
-    dbz_p1 = bz[e1:e2+1]
+    dbx_p1 = bx[e1:e2 + 1]
+    dby_p1 = by[e1:e2 + 1]
+    dbz_p1 = bz[e1:e2 + 1]
 
     dbx_p1 = np.diff(dbx_p1)
     dby_p1 = np.diff(dby_p1)
@@ -447,9 +660,9 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     d_bh_p1 = np.sum(d_bh_p1)
 
     # path-length of box hand - tweede fase deksel van de doos op hoogste punt
-    dbx_p2 = bx[e2:e3+1]
-    dby_p2 = by[e2:e3+1]
-    dbz_p2 = bz[e2:e3+1]
+    dbx_p2 = bx[e2:e3 + 1]
+    dby_p2 = by[e2:e3 + 1]
+    dbz_p2 = bz[e2:e3 + 1]
 
     dbx_p2 = np.diff(dbx_p2)
     dby_p2 = np.diff(dby_p2)
@@ -459,9 +672,9 @@ def calculate_extra_parameters(events, trigger_hand, box_hand):
     d_bh_p2 = sum(d_bh_p2)
 
     # path-length of trigger hand of triggerhand, not yet activated as e5 still needs to be calculated ??? -> check na wat dit betekent
-    dtx = tx[e4:e6+1]
-    dty = ty[e4:e6+1]
-    dtz = tz[e4:e6+1]
+    dtx = tx[e4:e6 + 1]
+    dty = ty[e4:e6 + 1]
+    dtz = tz[e4:e6 + 1]
 
     dtx = np.diff(dtx)
     dty = np.diff(dty)

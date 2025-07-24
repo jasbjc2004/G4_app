@@ -21,8 +21,8 @@ from matplotlib.lines import Line2D
 
 from logger import get_logbook
 from sensor_G4Track import initialize_system, set_units, get_active_hubs, close_sensor
-from data_processing import calibration_to_center, calculate_boxhand, calculate_position_events, \
-    calculate_extra_parameters, predict_score
+from data_processing import calculate_boxhand, calculate_position_events, \
+    calculate_extra_parameters, predict_score, Calibration
 
 from scipy import signal
 
@@ -32,9 +32,11 @@ from constants import READ_SAMPLE
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False, save=None):
+    def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False,
+                 save=None):
         super().__init__()
 
+        self.cali = None
         self.button_trigger = None
         self.logger = get_logbook('window_main_plot')
 
@@ -81,6 +83,8 @@ class MainWindow(QMainWindow):
         self.sound = sound
         self.participant_folder = None
 
+        self.progression = None
+
         fs = manage_settings.get("Sensors", "fs")
         fc = manage_settings.get("Sensors", "fc")
         ORDER_FILTER = manage_settings.get("Data-processing", "ORDER_FILTER")
@@ -100,7 +104,6 @@ class MainWindow(QMainWindow):
         self.saved_data = True
 
     def data_loss(self):
-        self.stop_current_reading()
         QMessageBox.critical(self, "Error", "Sensor is down, please check the connections")
 
     def interference_detected(self):
@@ -151,6 +154,10 @@ class MainWindow(QMainWindow):
         pdf_action.triggered.connect(self.download_pdf)
         tab_extra = file_menu.addAction("Add extra tab")
         tab_extra.triggered.connect(self.add_another_tab)
+        file_menu.addSeparator()
+        self.validate_action = file_menu.addAction("Validate calibration")
+        self.validate_action.triggered.connect(self.validate_cali)
+        self.validate_action.setEnabled(False)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("Quit")
         quit_action.triggered.connect(self.close)
@@ -456,7 +463,7 @@ class MainWindow(QMainWindow):
 
             # add manual sign
             if trial_data.shape[1] < 11:
-                tab.event_log = [0]*NUMBER_EVENTS
+                tab.event_log = [0] * NUMBER_EVENTS
             elif self.manual_events:
                 tab.event_log = trial_data.iloc[:, 12].values[0:NUMBER_EVENTS].tolist()
                 if all(x == 0 for x in tab.event_log):
@@ -623,7 +630,7 @@ class MainWindow(QMainWindow):
 
         if SERIAL_BUTTON and self.button_trigger is None:
             self.connection_button_action.setEnabled(True)
-        else:
+        elif not SERIAL_BUTTON:
             self.disconnecting_button()
             self.connection_button_action.setEnabled(False)
 
@@ -641,8 +648,8 @@ class MainWindow(QMainWindow):
         self.saved_data = False
 
         if tab is not None:
-            tab.stop_reading()
             self.data_thread.stop_current_reading()
+            tab.stop_reading()
             self.tab_widget.tabBar().setEnabled(True)
 
     def reset_current_reading(self):
@@ -739,12 +746,14 @@ class MainWindow(QMainWindow):
         close_sensor()
         self.connection_action.setEnabled(True)
         self.calibrate_action.setEnabled(False)
+        self.validate_action.setEnabled(False)
         self.disconnect_sensor_action.setEnabled(False)
         self.statusBar().showMessage("Successfully disconnected to sensors")
         self.status_widget.set_status("disconnected")
         self.update_toolbar()
 
     def disconnecting_button(self):
+        print('disconnecting')
         self.button_trigger.close()
         self.button_trigger = None
         self.connection_button_action.setEnabled(True)
@@ -755,6 +764,13 @@ class MainWindow(QMainWindow):
         """
         Calibrate the sensor with calibration_to_center(sys_id) of data_processing
         """
+        self.cali = Calibration(self.dongle_id)
+
+        if self.data_thread.isRunning():
+            self.data_thread.requestInterruption()
+            self.data_thread.quit()
+            self.data_thread.wait()
+
         ret = QMessageBox.Cancel
         if not self.first_calibration:
             ret = QMessageBox.warning(self, "Warning",
@@ -765,7 +781,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Info", "Started to calibrate. "
                                                   "Please wait a bit and keep the sensors at a fixed position.")
             try:
-                self.hub_id, self.lindex, self.rindex, calibration_status = calibration_to_center(self.dongle_id)
+                self.hub_id, self.lindex, self.rindex, calibration_status = self.cali.calibration_to_center()
             except:
                 calibration_status = False
             finally:
@@ -780,16 +796,59 @@ class MainWindow(QMainWindow):
                     QMessageBox.critical(self, "Warning", "Calibration did not succeed!")
             else:
                 self.first_calibration = False
-                """
-                CALIBRATION_CYCLE = manage_settings.get("Sensors", "CALIBRATION_CYCLE") - 1
-                while CALIBRATION_CYCLE >= 1:
-                    hub_id, lindex, rindex, calibration_status = calibration_to_center(self.dongle_id)
-                    if calibration_status:
-                        self.hub_id, self.lindex, self.rindex = hub_id, lindex, rindex
-                """
+
+                LONG_CALIBRATION = manage_settings.get("Calibration", "LONG_CALIBRATION")
+                if LONG_CALIBRATION:
+                    # start with orientation transformation
+                    QMessageBox.information(self, "Info", "Put one of the sensors on the button. "
+                                                          "Keep the other one still")
+                    self.cali.precise_rotation(0)
+                    QMessageBox.information(self, "Info", "Put one of the sensors in the outer left corner of the box. "
+                                                          "Keep the other one still")
+                    self.cali.precise_rotation(1)
+                    QMessageBox.information(self, "Info", "Put same sensor in the outer right corner of the box. "
+                                                          "Keep the other one still")
+                    self.cali.precise_rotation(2)
+
+                    QMessageBox.information(self, "Info", "Universal rotation set")
+
+                    # start with translation transformation
+                    QMessageBox.information(self, "Info", "Put one of the sensors on the button. "
+                                                          "Keep the other one still")
+                    # first phase to connect to button
+                    calibration_status = self.cali.calibration_to_button_first_phase()
+                    if not calibration_status:
+                        QMessageBox.critical(self, "Warning", "Calibration to button did not succeed! "
+                                                              "The program will use a less accurate calibration "
+                                                              "or try again")
+                    else:
+                        # second phase to check if it worked
+                        QMessageBox.information(self, "Info", "Put the other sensors on the button. "
+                                                              "Keep the other one still")
+                        calibration_status = self.cali.calibration_to_button_second_phase()
+                        if not calibration_status:
+                            QMessageBox.critical(self, "Warning", "Calibration to button did not succeed! "
+                                                                  "The program will use a less accurate calibration "
+                                                                  "or try again")
+                        else:
+                            QMessageBox.information(self, "Success", "Successfully calibrated to "
+                                                                     "sensors according to button!")
+                else:
+                    QMessageBox.information(self, "Success", "Successfully calibrated to sensors!")
+
+                self.validate_action.setEnabled(True)
                 self.update_toolbar()
-                QMessageBox.information(self, "Success", "Successfully calibrated to sensors!")
+
                 self.data_thread.start()
+
+    def validate_cali(self):
+        QMessageBox.information(self, "Info", "Put one of the sensors on the button. "
+                                              "Keep the other one still")
+        calibration_status = self.cali.calibration_to_button_second_phase()
+        if not calibration_status:
+            QMessageBox.critical(self, "Warning", "There was a slight change in the position. Please be aware of this")
+        else:
+            QMessageBox.information(self, "Success", "Successfully validated the position")
 
     def xt_plot(self):
         self.get_tab().xt_plot()
@@ -929,7 +988,7 @@ class MainWindow(QMainWindow):
             self.thread.wait()
 
         if self.data_thread and self.data_thread.isRunning():
-            self.data_thread.stop()
+            self.data_thread.requestInterruption()
             self.data_thread.quit()
             self.data_thread.wait()
 
@@ -1107,8 +1166,6 @@ class MainWindow(QMainWindow):
             plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
             plt.close(fig)
 
-            buf.seek(0)
-
             x_start = 15
             width = 80
             spacing_x = 5
@@ -1131,9 +1188,10 @@ class MainWindow(QMainWindow):
                 self.pdf.add_page()
                 self.y_image = self.pdf.get_y()
 
-            self.pdf.image(buf, x=x_image, y=self.y_image, w=width)
+            buf.seek(0)
+            self.pdf.image(buf, x=x_image, y=self.y_image, w=width, type='PNG')
 
-            if pos_plot[0] in [1, 3] or pos_plot[0] == pos_plot[1]-1:
+            if pos_plot[0] in [1, 3] or pos_plot[0] == pos_plot[1] - 1:
                 total_height = image_height + spacing_y
                 self.pdf.set_y(self.y_image + total_height)
 
@@ -1155,7 +1213,9 @@ class MainWindow(QMainWindow):
 
     def show_error(self, e):
         self.logger.error(e, exc_info=True)
-        self.progression.close()
+        if self.progression:
+            self.progression.close()
+            self.progression = None
         QMessageBox.critical(self, "Export Error", f"An error occurred during export: {str(e)}")
 
     def finish_export(self):
@@ -1183,6 +1243,7 @@ class MainWindow(QMainWindow):
 
             if self.progression:
                 self.progression.set_progress(100)
+                self.progression = None
 
             QMessageBox.information(self, "Success", f"Data saved in folder: {self.participant_folder}")
             self.saved_data = True
@@ -1282,7 +1343,8 @@ class ProgressionThread(QThread):
                 " ": [],
                 "Automatic events:": [tab.event_log[i] if tab.event_old_log[i] == 0 else tab.event_old_log[i] for i in
                                       range(NUMBER_EVENTS)] if tab.xs else [],
-                "Manual events:": ([0] * NUMBER_EVENTS if all(e == 0 for e in tab.event_old_log) else tab.event_log) if tab.xs else [],
+                "Manual events:": (
+                    [0] * NUMBER_EVENTS if all(e == 0 for e in tab.event_old_log) else tab.event_log) if tab.xs else [],
                 "Position events:": tab.event_position if tab.xs else []
             }
             max_length = max(len(v) for v in data.values())
@@ -1309,7 +1371,9 @@ class ProgressionThread(QThread):
                     box_hand = 'Right'
                 else:
                     box_hand = 'Both'
-                self.pdf.cell(0, 10, f"Trial {index + 1}:{f' score {tab.get_score()} & Box Hand: {box_hand}' if tab.xs else ''}", ln=True)
+                self.pdf.cell(0, 10,
+                              f"Trial {index + 1}:{f' score {tab.get_score()} & Box Hand: {box_hand}' if tab.xs else ''}",
+                              ln=True)
                 self.pdf.set_font("Arial", size=10)
 
                 doc = tab.notes_input.document()
@@ -1366,13 +1430,18 @@ class ProgressionThread(QThread):
                     events_table = [
                         ['', '', 'Frame', 'Absolute time (s)', 'Relative time (s)'],
                         ['e1', 'Start BH', events[0], round(tab.xs[events[0]], 2), 0],
-                        ['e2', 'Start box opening', events[1], round(tab.xs[events[1]], 2), round(tab.xs[events[1]] - tab.xs[events[0]], 2)],
-                        ['e3', 'End box opening', events[2], round(tab.xs[events[2]], 2), round(tab.xs[events[2]] - tab.xs[events[0]], 2)],
-                        ['e4', 'Anticipation TH', events[3], round(tab.xs[events[3]], 2), round(tab.xs[events[3]] - tab.xs[events[0]], 2)],
+                        ['e2', 'Start box opening', events[1], round(tab.xs[events[1]], 2),
+                         round(tab.xs[events[1]] - tab.xs[events[0]], 2)],
+                        ['e3', 'End box opening', events[2], round(tab.xs[events[2]], 2),
+                         round(tab.xs[events[2]] - tab.xs[events[0]], 2)],
+                        ['e4', 'Anticipation TH', events[3], round(tab.xs[events[3]], 2),
+                         round(tab.xs[events[3]] - tab.xs[events[0]], 2)],
                         ['e5', 'Start movement to trigger', events[4], round(tab.xs[events[4]], 2)
-                            if tab.xs[events[3]] != tab.xs[events[4]] else '', round(tab.xs[events[4]] - tab.xs[events[0]], 2)
-                            if tab.xs[events[3]] != tab.xs[events[4]] else ''],
-                        ['e6', 'End of trial', events[5], round(tab.xs[events[5]], 2), round(tab.xs[events[5]] - tab.xs[events[0]], 2)],
+                        if tab.xs[events[3]] != tab.xs[events[4]] else '',
+                         round(tab.xs[events[4]] - tab.xs[events[0]], 2)
+                         if tab.xs[events[3]] != tab.xs[events[4]] else ''],
+                        ['e6', 'End of trial', events[5], round(tab.xs[events[5]], 2),
+                         round(tab.xs[events[5]] - tab.xs[events[0]], 2)],
                     ]
                     events_table = [[str(cell) if cell != '' else '' for cell in row] for row in events_table]
 
@@ -1424,8 +1493,8 @@ class ProgressionThread(QThread):
                 if tab.get_score() == 3:
                     events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
                     tab.extra_parameters_bim, tab.extra_parameters_uni = calculate_extra_parameters(events,
-                                                                                                      tab.log_left,
-                                                                                                      tab.log_right)
+                                                                                                    tab.log_left,
+                                                                                                    tab.log_right)
 
                     self.pdf.set_font("Arial", style="B", size=11)
                     self.pdf.cell(0, 10, 'Parameters', ln=True)
@@ -1435,21 +1504,21 @@ class ProgressionThread(QThread):
 
                     data = [
                         ['', 'Parameter', 'Value'],
-                        ['Bimanual', 'Total time', str(round(tab.extra_parameters_bim[0], 2))],
-                        ['', 'Temporal coupling', str(round(tab.extra_parameters_bim[1], 2))],
-                        ['', 'Movement overlap', str(round(tab.extra_parameters_bim[2], 2))],
-                        ['', 'Goal synchronization', str(round(tab.extra_parameters_bim[3], 2))],
+                        ['Bimanual', 'Total time (s)', str(round(tab.extra_parameters_bim[0], 2))],
+                        ['', 'Temporal coupling (/)', str(round(tab.extra_parameters_bim[1], 2))],
+                        ['', 'Movement overlap (/)', str(round(tab.extra_parameters_bim[2], 2))],
+                        ['', 'Goal synchronization (/)', str(round(tab.extra_parameters_bim[3], 2))],
 
-                        ['Unimanual', 'Time box hand', str(round(tab.extra_parameters_uni[0], 2))],
-                        ['', 'Time 1e phase BH', str(round(tab.extra_parameters_uni[1], 2))],
-                        ['', 'Time 2e phase BH', str(round(tab.extra_parameters_uni[2], 2))],
-                        ['', 'Time trigger hand', str(round(tab.extra_parameters_uni[3], 2))],
-                        ['', 'Smoothness BH', str(round(tab.extra_parameters_uni[4], 2))],
-                        ['', 'Smoothness TH', str(round(tab.extra_parameters_uni[5], 2))],
-                        ['', 'Path length BH', str(round(tab.extra_parameters_uni[6], 2))],
-                        ['', 'Path 1e phase BH', str(round(tab.extra_parameters_uni[7], 2))],
-                        ['', 'Path 2e phase BH', str(round(tab.extra_parameters_uni[8], 2))],
-                        ['', 'Path length TH', str(round(tab.extra_parameters_uni[9], 2))],
+                        ['Unimanual', 'Time box hand (s)', str(round(tab.extra_parameters_uni[0], 2))],
+                        ['', 'Time 1e phase BH (s)', str(round(tab.extra_parameters_uni[1], 2))],
+                        ['', 'Time 2e phase BH (s)', str(round(tab.extra_parameters_uni[2], 2))],
+                        ['', 'Time trigger hand (s)', str(round(tab.extra_parameters_uni[3], 2))],
+                        ['', 'Smoothness BH (/)', str(round(tab.extra_parameters_uni[4], 2))],
+                        ['', 'Smoothness TH (/)', str(round(tab.extra_parameters_uni[5], 2))],
+                        ['', 'Path length BH (cm)', str(round(tab.extra_parameters_uni[6], 2))],
+                        ['', 'Path 1e phase BH (cm)', str(round(tab.extra_parameters_uni[7], 2))],
+                        ['', 'Path 2e phase BH (cm)', str(round(tab.extra_parameters_uni[8], 2))],
+                        ['', 'Path length TH (cm)', str(round(tab.extra_parameters_uni[9], 2))],
                     ]
 
                     line_height = 10
@@ -1511,6 +1580,7 @@ class ProgressionThread(QThread):
 
         col_widths = [45, 60, 40, 40]
         self.pdf.set_font('Arial', '', 11)
+        self.pdf.cell(0, 6, f"Total used trials: {self.count_active_tabs()}")
 
         data = [
             ['', 'Parameter', 'Average left (BH)', 'Average right (BH)'],

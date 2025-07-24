@@ -415,8 +415,8 @@ class TrailTab(QWidget):
             if isinstance(main_window, MainWindow):
                 main_window.update_toolbar()
 
-            self.update_plot(True)
             main_window.save_excel(self.trial_number)
+            self.update_plot(True)
 
     def reset_reading(self):
         if self.trial_state == TrialState.completed:
@@ -748,7 +748,7 @@ class TrailTab(QWidget):
                     ["e3", str(e3), str(round(self.xs[e3], 2)), str(round(self.xs[e3] - self.xs[e1], 2))],
                     ["e4", str(e4), str(round(self.xs[e4], 2)), str(round(self.xs[e4] - self.xs[e1], 2))],
                     ["e5", str(e5) if e4 != e5 else '', str(round(self.xs[e5], 2)), str(round(self.xs[e5] - self.xs[e1], 2))],
-                    ["e6", str(e6), str(round(self.xs[e6], 2)), str(round(self.xs[e6] - self.xs[e6], 2))]
+                    ["e6", str(e6), str(round(self.xs[e6], 2)), str(round(self.xs[e6] - self.xs[e1], 2))]
                 ]
 
                 char_format = QTextCharFormat()

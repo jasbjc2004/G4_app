@@ -298,6 +298,27 @@ def get_frame_data(system_id, hub_id_list):
     return fd, active_hubs, hub_count
 
 
+def get_frame_data_with_c_list(system_id, hub_id_list):
+    """
+    Enables the program to retrieve position & orientation from the hub (single frame, watch out with 120 Hz)
+    :param system_id: source configuration file (.g4c)
+    :type system_id: int
+    :param hub_id_list: array of hub ids the user is requesting data from
+    :type hub_id_list: c_list[int]
+    :return: a struct with the position and orientation, a number of active hubs
+     and a number of hubs worth of data returned in the fd (default set to 1)
+    :rtype: (G4FrameData, int, int)
+    """
+    fd = FRAME_DATA
+    res = g4_get_frame_data(ct.byref(fd), ct.c_int(system_id), hub_id_list, HUBS)
+
+    res = res & 0xFFFFFFFF
+    active_hubs = (res >> 16) & 0xFFFF
+    hub_count = res & 0xFFFF
+
+    return fd, active_hubs, hub_count
+
+
 def create_id(sys=-1, hub=0, sensor=0):
     """
     Create an id of the given input, needed for the Commands ('set_query'), no parameters needed
