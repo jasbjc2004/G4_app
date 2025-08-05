@@ -22,6 +22,7 @@ class SetUp(QDialog):
     """
     Window to add all the important data and load all the music in advance when user is filling in data
     """
+
     def __init__(self, folder=None):
         super().__init__()
 
@@ -46,7 +47,7 @@ class SetUp(QDialog):
         # Number of trials
         trial_layout = QHBoxLayout()
         self.combo_box = QComboBox()
-        for i in range(1, MAX_TRIALS+1):
+        for i in range(1, MAX_TRIALS + 1):
             self.combo_box.addItem(str(i), i)
 
         self.label = QLabel("Number of trials: ")
@@ -54,7 +55,7 @@ class SetUp(QDialog):
         if MAX_TRIALS >= 10:
             self.combo_box.setCurrentIndex(9)
         else:
-            self.combo_box.setCurrentIndex(MAX_TRIALS-1)
+            self.combo_box.setCurrentIndex(MAX_TRIALS - 1)
 
         trial_layout.addWidget(self.label)
         trial_layout.addWidget(self.combo_box)
@@ -275,9 +276,15 @@ class SetUp(QDialog):
                     self.date_input.setDate(date)
                     set_values[2] = 1
 
-                elif 'Total' in rule_list and 'trials:' in rule_list and set_values[3] == 0:
+                elif 'Total' in rule_list and 'trials:' in rule_list and set_values[3] == 0 and 'used' not in rule_list:
                     index_num_trials = rule_list.index('trials:')
-                    self.combo_box.setCurrentIndex(int(rule_list[index_num_trials + 1])-1)
+                    self.combo_box.setCurrentIndex(int(rule_list[index_num_trials + 1]) - 1)
+                    set_values[3] = 1
+
+                elif 'Total' in rule_list and 'trials:' in rule_list and 'used' in rule_list:
+                    index_num_trials = rule_list.index('trials:')
+                    if int(rule_list[index_num_trials + 1]) - 1 > self.combo_box.currentIndex():
+                        self.combo_box.setCurrentIndex(int(rule_list[index_num_trials + 1]) - 1)
                     set_values[3] = 1
 
                 else:

@@ -26,7 +26,7 @@ from logger import get_logbook
 from thread_reading import ReadThread
 from window_main_plot import MainWindow
 from widget_settings import manage_settings
-from constants import READ_SAMPLE, COLORS
+from constants import READ_SAMPLE, COLORS, BIMAN_PARAMS, UNIMAN_PARAMS
 
 
 class TrialState(Enum):
@@ -86,8 +86,8 @@ class TrailTab(QWidget):
         self.event_log = [0] * NUMBER_EVENTS
         self.event_old_log = [0] * NUMBER_EVENTS
         self.event_position = [None] * NUMBER_EVENTS
-        self.extra_parameters_bim = []
-        self.extra_parameters_uni = []
+        self.extra_parameters_bim = [0]*len(BIMAN_PARAMS)
+        self.extra_parameters_uni = [0]*len(UNIMAN_PARAMS)
 
         self.plot_left_data = []
         self.plot_right_data = []
@@ -728,7 +728,8 @@ class TrailTab(QWidget):
                                                                                                       self.log_left,
                                                                                                       self.log_right)
             else:
-                self.extra_parameters_bim, self.extra_parameters_uni = [], []
+                self.extra_parameters_bim = [0] * len(BIMAN_PARAMS)
+                self.extra_parameters_uni = [0] * len(UNIMAN_PARAMS)
 
             if self.get_score() != 0:
                 e1, e2, e3, e4, e5, e6 = self.event_log

@@ -99,7 +99,7 @@ class ReadThread(QThread):
             next_time += self.interval
             sleep_time = next_time - time.perf_counter()
             if sleep_time > 0:
-                QThread.msleep(round(sleep_time * 1000))
+                time.sleep(sleep_time)
 
     def keep_sensor_alive(self):
         """

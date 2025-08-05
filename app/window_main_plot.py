@@ -22,10 +22,11 @@ from matplotlib.lines import Line2D
 from logger import get_logbook
 from sensor_G4Track import initialize_system, set_units, get_active_hubs, close_sensor
 from data_processing import calculate_boxhand, calculate_position_events, \
-    calculate_extra_parameters, predict_score, Calibration
+    predict_score, Calibration
 
 from scipy import signal
 
+from thread_download import DownloadThread
 from thread_reading import ReadThread
 from widget_settings import manage_settings
 from constants import READ_SAMPLE
@@ -381,7 +382,8 @@ class MainWindow(QMainWindow):
 
             elif filename.endswith(('.xlsx', '.xls', '.xlsm')):
                 try:
-                    self.extract_excel(file_path)
+                    if os.path.splitext(filename)[0] not in os.path.basename(self.folder):
+                        self.extract_excel(file_path)
                 except:
                     QMessageBox.critical(self, "Error", f"Failed to get info from: {file_path}!")
                     continue
@@ -764,7 +766,10 @@ class MainWindow(QMainWindow):
         """
         Calibrate the sensor with calibration_to_center(sys_id) of data_processing
         """
-        self.cali = Calibration(self.dongle_id)
+        if self.dongle_id:
+            self.cali = Calibration(self.dongle_id)
+        else:
+            self.cali = None
 
         if self.data_thread.isRunning():
             self.data_thread.requestInterruption()
@@ -798,7 +803,7 @@ class MainWindow(QMainWindow):
                 self.first_calibration = False
 
                 LONG_CALIBRATION = manage_settings.get("Calibration", "LONG_CALIBRATION")
-                if LONG_CALIBRATION:
+                if not READ_SAMPLE and LONG_CALIBRATION:
                     # start with orientation transformation
                     QMessageBox.information(self, "Info", "Put one of the sensors on the button. "
                                                           "Keep the other one still")
@@ -1027,7 +1032,7 @@ class MainWindow(QMainWindow):
             self.make_dir()
 
         self.thread = QThread()
-        self.worker = ProgressionThread(self, self.participant_folder, index)
+        self.worker = DownloadThread(self, self.participant_folder, index)
         self.worker.moveToThread(self.thread)
 
         self.worker.pdf_ready_image.connect(self.add_plots_data)
@@ -1093,8 +1098,8 @@ class MainWindow(QMainWindow):
 
             self.make_progress()
             self.thread = QThread()
-            self.worker = ProgressionThread(self, self.participant_folder, -1, self.pdf,
-                                            [index for index in range(len(checkboxes)) if
+            self.worker = DownloadThread(self, self.participant_folder, -1, self.id_part, self.pdf,
+                                         [index for index in range(len(checkboxes)) if
                                              checkboxes[index].isChecked()])
             self.worker.moveToThread(self.thread)
 
@@ -1250,371 +1255,3 @@ class MainWindow(QMainWindow):
 
     def set_progress(self, value: int):
         self.progression.set_progress(value)
-
-
-class ProgressionThread(QThread):
-    """
-    Makes it possible to have a progression bar and exports all calculation to a separate thread
-    Needed to let the mainthread handle all the relavant windows and updating of plot (otherwise not possible)
-    """
-    progress = Signal(int)
-    pdf_ready_image = Signal(int, list, list, list, list, list, tuple)
-    finished_file = Signal()
-    error_occurred = Signal(str)
-
-    def __init__(self, parent: MainWindow, part_folder, index=-1, pdf=None, check=None):
-        super().__init__()
-
-        self.pdf = pdf
-        self.participant_folder = part_folder
-        self.checkboxes = check
-
-        self.num_trials = parent.num_trials
-        self.main = parent
-        self.counter_progress = 0
-
-        active_tabs = self.count_active_tabs()
-        if active_tabs == 0: active_tabs = 100
-        if self.checkboxes is not None and len(self.checkboxes) == 0:
-            self.step_progress = 100 / active_tabs
-        elif self.checkboxes is not None:
-            self.step_progress = 100 / (active_tabs * len(self.checkboxes))
-        else:
-            self.step_progress = 100
-
-        self.mutex = QMutex()
-        self.condition = QWaitCondition()
-
-        self.index = index
-
-    def count_active_tabs(self):
-        from widget_trials import TrailTab
-
-        counter_active = 0
-        for i in range(self.num_trials):
-            tab = self.main.tab_widget.widget(i)
-
-            if isinstance(tab, TrailTab) and len(tab.xs) > 0:
-                counter_active += 1
-        return counter_active
-
-    def run(self):
-        try:
-            if self.pdf:
-                self.num_trials = self.count_active_tabs()
-                self.pdf.cell(0, 8, f"Total used trials: {self.num_trials}", ln=True)
-
-            range_index = list(range(self.num_trials)) if self.index == -1 else [self.index]
-            for i in range_index:
-                self.export_tab(i)
-
-            if self.pdf:
-                self.pdf.add_page()
-                self.pdf.set_font("Arial", style="B", size=14)
-                self.pdf.cell(0, 10, f"Average over all trials with score 3", ln=True)
-                self.pdf.set_font("Arial", size=12)
-
-                self.average_events_info()
-
-            self.finished_file.emit()
-
-        except Exception as e:
-            self.error_occurred.emit(str(e))
-
-    def export_tab(self, index):
-        from widget_trials import TrailTab
-
-        tab = self.main.tab_widget.widget(index)
-
-        if isinstance(tab, TrailTab):
-            NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
-
-            data = {
-                "Time (s)": tab.xs if tab.xs else [],
-                "Left Sensor x (cm)": [pos[0] for pos in tab.log_left] if tab.xs else [],
-                "Left Sensor y (cm)": [pos[1] for pos in tab.log_left] if tab.xs else [],
-                "Left Sensor z (cm)": [pos[2] for pos in tab.log_left] if tab.xs else [],
-                "Left Sensor v (m/s)": [pos[3] for pos in tab.log_left] if tab.xs else [],
-                "Right Sensor x (cm)": [pos[0] for pos in tab.log_right] if tab.xs else [],
-                "Right Sensor y (cm)": [pos[1] for pos in tab.log_right] if tab.xs else [],
-                "Right Sensor z (cm)": [pos[2] for pos in tab.log_right] if tab.xs else [],
-                "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right] if tab.xs else [],
-                "Score:": [tab.get_score()] if tab.xs else [],
-                " ": [],
-                "Automatic events:": [tab.event_log[i] if tab.event_old_log[i] == 0 else tab.event_old_log[i] for i in
-                                      range(NUMBER_EVENTS)] if tab.xs else [],
-                "Manual events:": (
-                    [0] * NUMBER_EVENTS if all(e == 0 for e in tab.event_old_log) else tab.event_log) if tab.xs else [],
-                "Position events:": tab.event_position if tab.xs else []
-            }
-            max_length = max(len(v) for v in data.values())
-            for key in data:
-                data[key].extend([None] * (max_length - len(data[key])))
-            df = pd.DataFrame(data)
-            trial_file = os.path.join(self.participant_folder, f"trial_{index + 1}.xlsx")
-            if os.path.exists(trial_file):
-                os.remove(trial_file)
-            df.to_excel(trial_file, index=False)
-            if self.pdf:
-                current_y = self.pdf.get_y()
-                page_height = self.pdf.h - 20  # margin
-                available_space = page_height - current_y
-
-                if available_space < 40:
-                    self.pdf.add_page()
-                    self.y_image = self.pdf.get_y()
-
-                self.pdf.set_font("Arial", style="B", size=13)
-                if tab.case_status in [0, 5]:
-                    box_hand = 'Left'
-                elif tab.case_status in [1, 4]:
-                    box_hand = 'Right'
-                else:
-                    box_hand = 'Both'
-                self.pdf.cell(0, 10,
-                              f"Trial {index + 1}:{f' score {tab.get_score()} & Box Hand: {box_hand}' if tab.xs else ''}",
-                              ln=True)
-                self.pdf.set_font("Arial", size=10)
-
-                doc = tab.notes_input.document()
-                block = doc.begin()
-
-                black_fragments = []
-                red_fragments = []
-
-                while block.isValid():
-                    cursor = QTextCursor(block)
-                    if cursor.currentTable() is None:
-                        fmt = cursor.charFormat()
-                        color = fmt.foreground().color()
-                        text = block.text()
-
-                        if color == QColor(Qt.red):
-                            red_fragments.append(text)
-                        else:
-                            black_fragments.append(text)
-
-                    block = block.next()
-
-                filtered_red_fragments = [fram for fram in red_fragments if fram.strip() != '']
-                filtered_black_fragments = [fram for fram in black_fragments if fram.strip() != '']
-
-                if filtered_red_fragments:
-                    red_text = "\n".join(filtered_red_fragments)
-                else:
-                    red_text = "No Automatic Notes"
-                if filtered_black_fragments:
-                    black_text = "\n".join(filtered_black_fragments)
-                else:
-                    black_text = "No Additional Notes"
-
-                self.pdf.multi_cell(0, 6, black_text)
-
-                self.pdf.ln(5)
-
-                self.pdf.set_text_color(255, 0, 0)
-                self.pdf.multi_cell(0, 6, red_text)
-                self.pdf.set_text_color(0, 0, 0)
-
-                self.pdf.ln(5)
-
-                if tab.xs:
-                    events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
-
-                    self.pdf.set_font("Arial", style="B", size=11)
-                    self.pdf.cell(0, 10, 'Events', ln=True)
-
-                    col_widths = [10, 50, 20, 40, 40]
-                    self.pdf.set_font('Arial', '', 10)
-
-                    events_table = [
-                        ['', '', 'Frame', 'Absolute time (s)', 'Relative time (s)'],
-                        ['e1', 'Start BH', events[0], round(tab.xs[events[0]], 2), 0],
-                        ['e2', 'Start box opening', events[1], round(tab.xs[events[1]], 2),
-                         round(tab.xs[events[1]] - tab.xs[events[0]], 2)],
-                        ['e3', 'End box opening', events[2], round(tab.xs[events[2]], 2),
-                         round(tab.xs[events[2]] - tab.xs[events[0]], 2)],
-                        ['e4', 'Anticipation TH', events[3], round(tab.xs[events[3]], 2),
-                         round(tab.xs[events[3]] - tab.xs[events[0]], 2)],
-                        ['e5', 'Start movement to trigger', events[4], round(tab.xs[events[4]], 2)
-                        if tab.xs[events[3]] != tab.xs[events[4]] else '',
-                         round(tab.xs[events[4]] - tab.xs[events[0]], 2)
-                         if tab.xs[events[3]] != tab.xs[events[4]] else ''],
-                        ['e6', 'End of trial', events[5], round(tab.xs[events[5]], 2),
-                         round(tab.xs[events[5]] - tab.xs[events[0]], 2)],
-                    ]
-                    events_table = [[str(cell) if cell != '' else '' for cell in row] for row in events_table]
-
-                    line_height = 10
-                    self.pdf.set_fill_color(235, 235, 235)  # lichtgrijs
-                    self.pdf.set_text_color(0, 0, 0)
-
-                    for row_ind, row in enumerate(events_table):
-                        self.pdf.set_x(20)
-                        first_row = (row_ind == 0)
-
-                        for col_ind, datum in enumerate(row):
-                            fill = first_row or col_ind == 0
-                            align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
-                            style = 'B' if first_row or col_ind == 0 else ''
-                            self.pdf.set_font("Arial", style, size=10)
-                            self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
-
-                        self.pdf.ln(line_height)
-
-                    self.pdf.ln(5)
-
-                    count_imag = 0
-                    for pos_index in self.checkboxes:
-                        left_data = [data["Left Sensor x (cm)"] if pos_index == 0 else
-                                     data["Left Sensor y (cm)"] if pos_index == 1 else
-                                     data["Left Sensor z (cm)"] if pos_index == 2 else
-                                     data["Left Sensor v (m/s)"]][0]
-                        right_data = [data["Right Sensor x (cm)"] if pos_index == 0 else
-                                      data["Right Sensor y (cm)"] if pos_index == 1 else
-                                      data["Right Sensor z (cm)"] if pos_index == 2 else
-                                      data["Right Sensor v (m/s)"]][0]
-                        events = [ei if ei is not None else 0 for ei in tab.event_log]
-
-                        self.mutex.lock()
-                        self.pdf_ready_image.emit(pos_index, tab.xs, left_data, right_data, events,
-                                                  tab.event_position, (count_imag, len(self.checkboxes)))
-                        count_imag += 1
-                        self.condition.wait(self.mutex)
-                        self.mutex.unlock()
-
-                        self.counter_progress += self.step_progress
-                        self.progress.emit(round(self.counter_progress))
-
-                if self.counter_progress < (index + 1) * self.step_progress:
-                    self.counter_progress += self.step_progress
-                    self.progress.emit(round(self.counter_progress))
-
-                if tab.get_score() == 3:
-                    events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
-                    tab.extra_parameters_bim, tab.extra_parameters_uni = calculate_extra_parameters(events,
-                                                                                                    tab.log_left,
-                                                                                                    tab.log_right)
-
-                    self.pdf.set_font("Arial", style="B", size=11)
-                    self.pdf.cell(0, 10, 'Parameters', ln=True)
-
-                    col_widths = [45, 60, 40]
-                    self.pdf.set_font('Arial', '', 10)
-
-                    data = [
-                        ['', 'Parameter', 'Value'],
-                        ['Bimanual', 'Total time (s)', str(round(tab.extra_parameters_bim[0], 2))],
-                        ['', 'Temporal coupling (/)', str(round(tab.extra_parameters_bim[1], 2))],
-                        ['', 'Movement overlap (/)', str(round(tab.extra_parameters_bim[2], 2))],
-                        ['', 'Goal synchronization (/)', str(round(tab.extra_parameters_bim[3], 2))],
-
-                        ['Unimanual', 'Time box hand (s)', str(round(tab.extra_parameters_uni[0], 2))],
-                        ['', 'Time 1e phase BH (s)', str(round(tab.extra_parameters_uni[1], 2))],
-                        ['', 'Time 2e phase BH (s)', str(round(tab.extra_parameters_uni[2], 2))],
-                        ['', 'Time trigger hand (s)', str(round(tab.extra_parameters_uni[3], 2))],
-                        ['', 'Smoothness BH (/)', str(round(tab.extra_parameters_uni[4], 2))],
-                        ['', 'Smoothness TH (/)', str(round(tab.extra_parameters_uni[5], 2))],
-                        ['', 'Path length BH (cm)', str(round(tab.extra_parameters_uni[6], 2))],
-                        ['', 'Path 1e phase BH (cm)', str(round(tab.extra_parameters_uni[7], 2))],
-                        ['', 'Path 2e phase BH (cm)', str(round(tab.extra_parameters_uni[8], 2))],
-                        ['', 'Path length TH (cm)', str(round(tab.extra_parameters_uni[9], 2))],
-                    ]
-
-                    line_height = 10
-                    self.pdf.set_fill_color(235, 235, 235)  # lichtgrijs
-                    self.pdf.set_text_color(0, 0, 0)
-
-                    for row_ind, row in enumerate(data):
-                        self.pdf.set_x(20)
-                        first_row = (row_ind == 0)
-
-                        for col_ind, datum in enumerate(row):
-                            fill = first_row or col_ind == 0
-                            align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
-                            style = 'B' if first_row or col_ind == 0 else ''
-                            self.pdf.set_font("Arial", style, size=10)
-                            self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
-
-                        self.pdf.ln(line_height)
-
-    def average_events_info(self):
-        from widget_trials import TrailTab
-
-        average_bim_left = [0] * 4
-        average_uni_left = [0] * 10
-        left_counter = 0
-        average_bim_right = [0] * 4
-        average_uni_right = [0] * 10
-        right_counter = 0
-
-        for i in range(self.main.tab_widget.count()):
-            tab = self.main.tab_widget.widget(i)
-
-            if isinstance(tab, TrailTab) and len(tab.extra_parameters_bim) > 0:
-                if tab.case_status == 0 and average_bim_left[0] == 0:
-                    average_bim_left = tab.extra_parameters_bim
-                    average_uni_left = tab.extra_parameters_uni
-                    left_counter = 1
-                elif tab.case_status == 1 and average_bim_right[0] == 0:
-                    average_bim_right = tab.extra_parameters_bim
-                    average_uni_right = tab.extra_parameters_uni
-                    right_counter = 1
-                elif tab.case_status == 0:
-                    average_bim_left = tuple(
-                        [a + b for a, b in zip(average_bim_left, tab.extra_parameters_bim)])
-                    average_uni_left = tuple(
-                        [a + b for a, b in zip(average_uni_left, tab.extra_parameters_uni)])
-                    left_counter += 1
-                elif tab.case_status == 1:
-                    average_bim_right = tuple(
-                        [a + b for a, b in zip(average_bim_right, tab.extra_parameters_bim)])
-                    average_uni_right = tuple(
-                        [a + b for a, b in zip(average_uni_right, tab.extra_parameters_uni)])
-                    right_counter += 1
-
-        average_bim_left = tuple([temp / left_counter if left_counter != 0 else 0 for temp in average_bim_left])
-        average_uni_left = tuple([temp / left_counter if left_counter != 0 else 0 for temp in average_uni_left])
-        average_bim_right = tuple([temp / right_counter if right_counter != 0 else 0 for temp in average_bim_right])
-        average_uni_right = tuple([temp / right_counter if right_counter != 0 else 0 for temp in average_uni_right])
-
-        col_widths = [45, 60, 40, 40]
-        self.pdf.set_font('Arial', '', 11)
-        self.pdf.cell(0, 6, f"Total used trials: {self.count_active_tabs()}")
-
-        data = [
-            ['', 'Parameter', 'Average left (BH)', 'Average right (BH)'],
-            ['', 'Total trials', str(left_counter), str(right_counter)],
-            ['Bimanual', 'Total time (s)', str(round(average_bim_left[0], 2)), str(round(average_bim_right[0], 2))],
-            ['', 'Temporal coupling (/)', str(round(average_bim_left[1], 2)), str(round(average_bim_right[1], 2))],
-            ['', 'Movement overlap  (/)', str(round(average_bim_left[2], 2)), str(round(average_bim_right[2], 2))],
-            ['', 'Goal synchronization (/)', str(round(average_bim_left[3], 2)), str(round(average_bim_right[3], 2))],
-
-            ['Unimanual', 'Time box hand (s)', str(round(average_uni_left[0], 2)), str(round(average_uni_right[0], 2))],
-            ['', 'Time 1e phase BH (s)', str(round(average_uni_left[1], 2)), str(round(average_uni_right[1], 2))],
-            ['', 'Time 2e phase BH (s)', str(round(average_uni_left[2], 2)), str(round(average_uni_right[2], 2))],
-            ['', 'Time trigger hand (s)', str(round(average_uni_left[3], 2)), str(round(average_uni_right[3], 2))],
-            ['', 'Smoothness BH (/)', str(round(average_uni_left[4], 2)), str(round(average_uni_right[4], 2))],
-            ['', 'Smoothness TH (/)', str(round(average_uni_left[5], 2)), str(round(average_uni_right[5], 2))],
-            ['', 'Path length BH (cm)', str(round(average_uni_left[6], 2)), str(round(average_uni_right[6], 2))],
-            ['', 'Path 1e phase BH (cm)', str(round(average_uni_left[7], 2)), str(round(average_uni_right[7], 2))],
-            ['', 'Path 2e phase BH (cm)', str(round(average_uni_left[8], 2)), str(round(average_uni_right[8], 2))],
-            ['', 'Path length TH (cm)', str(round(average_uni_left[9], 2)), str(round(average_uni_right[9], 2))],
-        ]
-
-        line_height = 10
-        self.pdf.set_fill_color(235, 235, 235)
-        self.pdf.set_text_color(0, 0, 0)
-
-        for row_ind, row in enumerate(data):
-            self.pdf.set_x(15)
-            first_row = (row_ind == 0)
-
-            for col_ind, datum in enumerate(row):
-                fill = first_row or col_ind == 0
-                align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
-                style = 'B' if first_row or col_ind == 0 else ''
-                self.pdf.set_font("Arial", style, size=11)
-                self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
-
-            self.pdf.ln(line_height)

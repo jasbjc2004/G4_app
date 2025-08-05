@@ -1,6 +1,6 @@
 #MAX_TRAILS = 21
 
-READ_SAMPLE = False
+READ_SAMPLE = True
 BEAUTY_SPEED = True
 NAME_APP = 'Bimanual Hand Movement'
 #SERIAL_BUTTON = True
@@ -43,3 +43,8 @@ COLORS = [
     ("#000000", "Black"),  # For contrast on light backgrounds
     ("#FF0080", "Pink")  # Pink - distinct from red/magenta
 ]
+
+BIMAN_PARAMS = ['Total time (s)', 'Temporal coupling (/)', 'Movement overlap  (/)', 'Goal synchronization (/)']
+UNIMAN_PARAMS = ['Time box hand (s)', 'Time 1e phase BH (s)', 'Time 2e phase BH (s)', 'Time trigger hand (s)',
+                 'Smoothness BH (/)', 'Smoothness TH (/)', 'Path length BH (cm)', 'Path 1e phase BH (cm)',
+                 'Path 2e phase BH (cm)', 'Path length TH (cm)']
