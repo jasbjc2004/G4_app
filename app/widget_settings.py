@@ -181,7 +181,7 @@ class Settings(QDialog):
                 var_layout = QHBoxLayout()
 
                 var_box = QLabel(variabel.replace("_", " ").capitalize())
-                var_box.setFixedWidth(150)
+                var_box.setFixedWidth(250)
                 var_box.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 var_layout.addWidget(var_box)
 
@@ -207,6 +207,9 @@ class Settings(QDialog):
                         page_layout.addLayout(var_layout)
                         var_layout = QHBoxLayout()
                         item_list.append(item_edit)
+                        if tab == 'Calibration':
+                            validator = SinglePointDoubleValidator(0.01, 1000.0, 2)
+                            item_edit.setValidator(validator)
                     self.var_widget[(tab, variabel)] = item_list
                 else:
                     value_box = QLineEdit()
@@ -225,14 +228,15 @@ class Settings(QDialog):
                     var_layout.addWidget(value_box)
                     page_layout.addLayout(var_layout)
                     self.var_widget[(tab, variabel)] = value_box
-                    if variabel == 'MAX_TRIALS' or variabel == "SENSORS_USED" or variabel == "MAX_ATTEMPTS_CONNECT":
+                    if variabel in ['MAX_TRIALS', "SENSORS_USED", "MAX_ATTEMPTS_CONNECT",
+                                    "MAX_ATTEMPTS_CALIBRATION", "ORDER_FILTER", "ORDER_EXTREMA"]:
                         validator = IntPointlessValidator(r'^[0-9]*$', 1, 1000)
                         value_box.setValidator(validator)
                     else:
                         if variabel == "THRESHOLD_CALIBRATION":
                             validator = SinglePointDoubleValidator(0.0001, 1000.0, 4)
                         else:
-                            validator = SinglePointDoubleValidator(0.001, 1000.0, 2)
+                            validator = SinglePointDoubleValidator(0.01, 1000.0, 2)
                         value_box.setValidator(validator)
 
             page_layout.addStretch()
