@@ -650,8 +650,11 @@ class MainWindow(QMainWindow):
         self.saved_data = False
 
         if tab is not None:
+            self.data_thread.pause()
+            self.data_thread.wait_until_paused()
             self.data_thread.stop_current_reading()
             tab.stop_reading()
+            self.data_thread.resume()
             self.tab_widget.tabBar().setEnabled(True)
 
     def reset_current_reading(self):
@@ -766,7 +769,8 @@ class MainWindow(QMainWindow):
         """
         Calibrate the sensor with calibration_to_center(sys_id) of data_processing
         """
-        if self.dongle_id:
+        if self.dongle_id and not READ_SAMPLE:
+            print('here')
             self.cali = Calibration(self.dongle_id)
         else:
             self.cali = None
@@ -786,7 +790,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Info", "Started to calibrate. "
                                                   "Please wait a bit and keep the sensors at a fixed position.")
             try:
-                self.hub_id, self.lindex, self.rindex, calibration_status = self.cali.calibration_to_center()
+                if READ_SAMPLE:
+                    self.hub_id, self.lindex, self.rindex, calibration_status = self.cali.calibration_to_center()
             except:
                 calibration_status = False
             finally:

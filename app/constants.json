@@ -18,7 +18,7 @@
             9.7
         ],
         "THRESHOLD_CALIBRATION": 0.01,
-        "MAX_ATTEMPTS_CALIBRATION": 10
+        "MAX_ATTEMPTS_CALIBRATION": 5
     },
     "Sensors": {
         "fs": 120,
@@ -37,9 +37,7 @@
         "THRESHOLD_BOTH_HANDS": 20,
         "THRESHOLD_CHANGED_HANDS_MEAS": 20,
         "SPEED_THRESHOLD": 0.05,
-        "HEIGHT_BOX": 15,
-        "THRESHOLD_CALIBRATION": 0.01,
-        "MAX_ATTEMPTS_CALIBRATION": 5
+        "HEIGHT_BOX": 15
     },
     "Events": {
         "NUMBER_EVENTS": 6,
