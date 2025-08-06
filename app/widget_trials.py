@@ -819,7 +819,7 @@ class TrailTab(QWidget):
             num_sound = len(main_window.sound)
             random_sound = random.randint(0, num_sound - 1)
 
-            self.sound = main_window.sound[random_sound]
+            self.sound = main_window.sound[random_sound][-1]
 
         self.sound.play()
         timer = threading.Timer(2.0, self.stop_music)

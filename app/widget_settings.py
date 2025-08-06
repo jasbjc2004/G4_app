@@ -2,7 +2,9 @@ import json
 # import logging
 import os
 import sys
+import threading
 
+import pygame
 from PySide6.QtCore import Qt, QRegularExpression
 from PySide6.QtGui import QIcon, QDoubleValidator, QValidator, QPixmap, \
     QColor, QPainter, QPainterPath
@@ -152,7 +154,7 @@ class Settings(QDialog):
         self.list_widget = QListWidget()
         self.list_widget.setFixedWidth(150)
 
-        menu = ['General', "Calibration", 'Sensors', 'Data-processing', 'Events']
+        menu = ['General', "Calibration", 'Sensors', 'Data-processing', 'Events', 'Music']
         for tab in menu:
             QListWidgetItem(tab, self.list_widget)
 
@@ -238,6 +240,20 @@ class Settings(QDialog):
                         else:
                             validator = SinglePointDoubleValidator(0.01, 1000.0, 2)
                         value_box.setValidator(validator)
+
+            if tab == 'Music':
+                for music_dir, sound in self.parent().sound:
+                    music_layout = QHBoxLayout()
+                    var_box = QLabel(os.path.basename(music_dir))
+                    var_box.setFixedWidth(250)
+                    var_box.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                    music_layout.addWidget(var_box)
+
+                    var_button = QPushButton("▶")
+                    var_button.clicked.connect(lambda checked=False, s=sound: self.play_music(s))
+                    var_button.setFixedWidth(40)
+                    music_layout.addWidget(var_button, alignment=Qt.AlignRight)
+                    page_layout.addLayout(music_layout)
 
             page_layout.addStretch()
             self.stack.addWidget(page)
@@ -383,6 +399,14 @@ class Settings(QDialog):
 
         self.parent().update_plot()
         self.parent().update_toolbar()
+
+    def play_music(self, sound):
+        sound.play()
+        timer = threading.Timer(2.0, self.stop_music)
+        timer.start()
+
+    def stop_music(self):
+        pygame.mixer.stop()
 
 
 class IntPointlessValidator(QValidator):

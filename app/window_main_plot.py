@@ -324,6 +324,13 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
+        self.camera_button_action = QAction("Connect camera", self)
+        self.camera_button_action.setStatusTip("Connect camera to check the time")
+        self.camera_button_action.triggered.connect(lambda: self.camera_connect())
+        toolbar.addAction(self.camera_button_action)
+
+        toolbar.addSeparator()
+
         self.start_action = QAction("Start trial", self)
         self.start_action.setStatusTip("Start the current trial")
         self.start_action.triggered.connect(lambda: self.start_current_reading())
@@ -745,6 +752,9 @@ class MainWindow(QMainWindow):
 
         popup = ButtonTester(self)
         popup.show()
+
+    def camera_connect(self):
+        print('hello')
 
     def disconnecting_sensors(self):
         self.is_connected = False

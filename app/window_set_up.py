@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 
 import pygame
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QDate, QSize
 
+from constants import NAME_APP
 from widget_settings import manage_settings
 
 import pikepdf
@@ -154,7 +156,16 @@ class SetUp(QDialog):
         self.sound = list()
         pygame.mixer.init()
 
-        music_folder = os.path.join(file_directory, 'NEEDED/MUSIC')
+        if getattr(sys, 'frozen', False):
+            # Running as packaged executable
+            user_music_folder = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', NAME_APP, 'MUSIC')
+            if not os.path.exists(user_music_folder) or not os.listdir(user_music_folder):
+                music_folder = os.path.join(file_directory, 'NEEDED/MUSIC')
+            else:
+                music_folder = user_music_folder
+        else:
+            # Running from source (PyCharm/development)
+            music_folder = os.path.join(file_directory, 'NEEDED/MUSIC')
         dir_sound = []
         for filename in os.listdir(music_folder):
             file_path = os.path.join(music_folder, filename)
@@ -219,10 +230,10 @@ class SetUp(QDialog):
         self.close()
 
     def load_sound(self, dir_sound):
-        if pygame.mixer.get_init():
+        if not pygame.mixer.get_init():
             pygame.mixer.init()
 
-        self.sound.append(pygame.mixer.Sound(dir_sound))
+        self.sound.append((dir_sound, pygame.mixer.Sound(dir_sound)))
 
     def load_pdf(self):
         """
