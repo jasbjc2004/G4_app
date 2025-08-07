@@ -1,6 +1,7 @@
 import json
 # import logging
 import os
+import shutil
 import sys
 import threading
 
@@ -10,18 +11,45 @@ from PySide6.QtGui import QIcon, QDoubleValidator, QValidator, QPixmap, \
     QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, QListWidget, \
     QStackedWidget, QListWidgetItem, QWidget, QFrame, QLineEdit, QCheckBox, QMessageBox, QComboBox, \
-    QGraphicsOpacityEffect
+    QGraphicsOpacityEffect, QSizePolicy, QFileDialog
 
 from constants import COLORS, NAME_APP
 from logger import get_logbook
 
-"""
-logging.basicConfig(
-    filename='logboek.txt',
-    level=logging.ERROR,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-"""
+invisible_style = """
+                    QPushButton {
+                        background-color: transparent;
+                        border: none;
+                        font-size: 20px;
+                    }
+                    QPushButton:hover {
+                        color: lightgray;
+                    }
+                """
+invisible_style_reset = """
+                            QPushButton {
+                                background-color: transparent;
+                                border: none;
+                            }
+                            QPushButton:hover {
+                                color: lightgray;
+                            }
+                        """
+invisible_style_check = """
+                            QPushButton {
+                                background-color: transparent;
+                                font-size: 20px;
+                                padding: 0px;
+                                margin: 0px;
+                                min-width: 0px;
+                            }
+                            QPushButton:hover {
+                                color: lightgray;
+                            }
+                            QPushButton:checked {
+                                color: red;
+                            }
+                        """
 
 
 class SettingsManager:
@@ -148,6 +176,23 @@ class Settings(QDialog):
         self.setWindowFlags(Qt.Window)
         self.setModal(True)
 
+        self.current_music = None
+        self.current_timer = None
+        self.del_music_button = []
+
+        file_directory = (os.path.dirname(os.path.abspath(__file__)))
+        if getattr(sys, 'frozen', False):
+            # Running as packaged executable
+            user_music_folder = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', NAME_APP, 'MUSIC')
+            if not os.path.exists(user_music_folder) or not os.listdir(user_music_folder):
+                self.music_folder = os.path.join(file_directory, 'NEEDED/MUSIC')
+            else:
+                self.music_folder = user_music_folder
+        else:
+            # Running from source (PyCharm/development)
+            self.music_folder = os.path.join(file_directory, 'NEEDED/MUSIC')
+        self.basic_music_folder = os.path.join(file_directory, 'NEEDED/BASIC_MUSIC')
+
         layout = QVBoxLayout()
         page_main_layout = QHBoxLayout()
 
@@ -242,20 +287,45 @@ class Settings(QDialog):
                         value_box.setValidator(validator)
 
             if tab == 'Music':
+                self.music_page_layout = page_layout
+                music_layout = QHBoxLayout()
+                music_layout.setSpacing(2)
+                music_layout.setContentsMargins(0, 0, 0, 0)
+                music_layout.addStretch()
+
+                fixed_height = 24
+
+                plus_button = QPushButton("+")
+                plus_button.setStyleSheet(invisible_style)
+                plus_button.clicked.connect(lambda: self.add_music())
+                plus_button.setFixedWidth(25)
+                plus_button.setFixedHeight(fixed_height)
+                plus_button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+                music_layout.addWidget(plus_button)
+
+                min_button = QPushButton("-")
+                min_button.setStyleSheet(invisible_style)
+                min_button.clicked.connect(lambda: self.delete_music())
+                min_button.setFixedWidth(25)
+                min_button.setFixedHeight(fixed_height)
+                min_button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+                music_layout.addWidget(min_button)
+
+                music_layout.addSpacing(8)
+
+                reset_button = QPushButton("Reset")
+                reset_button.setStyleSheet(invisible_style_reset)
+                reset_button.clicked.connect(lambda: self.reset_music())
+                reset_button.setFixedHeight(fixed_height)
+                reset_button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+                music_layout.addWidget(reset_button)
+
+                page_layout.addLayout(music_layout)
+
                 for music_dir, sound in self.parent().sound:
-                    music_layout = QHBoxLayout()
-                    var_box = QLabel(os.path.basename(music_dir))
-                    var_box.setFixedWidth(250)
-                    var_box.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                    music_layout.addWidget(var_box)
-
-                    var_button = QPushButton("▶")
-                    var_button.clicked.connect(lambda checked=False, s=sound: self.play_music(s))
-                    var_button.setFixedWidth(40)
-                    music_layout.addWidget(var_button, alignment=Qt.AlignRight)
-                    page_layout.addLayout(music_layout)
-
-            page_layout.addStretch()
+                    self.add_music_widget(music_dir, sound)
+            else:
+                page_layout.addStretch()
             self.stack.addWidget(page)
             self.pages.append(page)
 
@@ -287,6 +357,140 @@ class Settings(QDialog):
 
         self.list_widget.setCurrentRow(0)
         self.setLayout(layout)
+
+    def add_music_widget(self, music_dir, sound):
+        item = self.music_page_layout.itemAt(self.music_page_layout.count() - 1)
+        if item.spacerItem() is not None:
+            self.music_page_layout.takeAt(self.music_page_layout.count() - 1)
+
+        music_layout = QHBoxLayout()
+
+        var_button = QPushButton()
+        var_button.setStyleSheet(invisible_style_check)
+        var_button.setCheckable(True)
+        var_button.setFixedSize(20, 20)
+        music_layout.addWidget(var_button, alignment=Qt.AlignLeft)
+        self.del_music_button.append(var_button)
+        self.music_page_layout.addLayout(music_layout)
+
+        var_box = QLabel(os.path.basename(music_dir))
+        var_box.setFixedWidth(300)
+        var_box.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        music_layout.addWidget(var_box)
+
+        var_button = QPushButton("▶")
+        var_button.setStyleSheet(invisible_style)
+        var_button.clicked.connect(lambda checked=False, s=sound: self.play_music(s))
+        var_button.setFixedWidth(40)
+        music_layout.addWidget(var_button, alignment=Qt.AlignRight)
+        self.music_page_layout.addLayout(music_layout)
+
+        self.music_page_layout.addStretch()
+
+    def add_music(self):
+        music_file, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select a Music File",
+            os.path.expanduser("~/Documents"),
+            "Audio Files (*.mp3 *.wav *.ogg *.flac)"
+        )
+
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
+
+        sound = pygame.mixer.Sound(music_file)
+        self.parent().sound.append((music_file, sound))
+        shutil.copy2(music_file, self.music_folder)
+
+        self.add_music_widget(music_file, sound)
+
+    def delete_music(self):
+        selection_plot = QDialog(self)
+        selection_plot.setWindowTitle("Select music to delete")
+        layout = QVBoxLayout()
+
+        checkboxes = [QCheckBox(os.path.basename(music_dir)) for music_dir in os.listdir(self.music_folder)]
+        for checkbox in checkboxes:
+            checkbox.setChecked(False)
+            layout.addWidget(checkbox)
+
+        for i in reversed(range(self.music_page_layout.count())):
+            item = self.music_page_layout.itemAt(i)
+
+            if item.layout():
+                sub_layout = item.layout()
+                count = sub_layout.count()
+
+                if count == 0:
+                    self.music_page_layout.takeAt(i)
+                    continue
+
+                last_item = sub_layout.itemAt(0)
+                widget = last_item.widget()
+
+                if isinstance(widget, QPushButton) and widget.text() == 'Reset':
+                    break
+
+                self.music_page_layout.takeAt(i)
+
+                while sub_layout.count():
+                    inner_item = sub_layout.takeAt(0)
+                    if inner_item.widget():
+                        inner_item.widget().setParent(None)
+                    elif inner_item.layout():
+                        print('found some layout extra')
+                    else:
+                        print('stuck')
+
+    def reset_music(self):
+        for i in reversed(range(self.music_page_layout.count())):
+            item = self.music_page_layout.itemAt(i)
+
+            if item.layout():
+                sub_layout = item.layout()
+                count = sub_layout.count()
+
+                if count == 0:
+                    self.music_page_layout.takeAt(i)
+                    continue
+
+                last_item = sub_layout.itemAt(count - 1)
+                widget = last_item.widget()
+
+                if isinstance(widget, QPushButton) and widget.text() == 'Reset':
+                    break
+
+                self.music_page_layout.takeAt(i)
+
+                while sub_layout.count():
+                    inner_item = sub_layout.takeAt(0)
+                    if inner_item.widget():
+                        inner_item.widget().setParent(None)
+                    elif inner_item.layout():
+                        print('found some layout extra')
+                    else:
+                        print('stuck')
+
+            elif item.spacerItem() is not None:
+                self.music_page_layout.takeAt(i)
+
+        self.parent().sound = []
+        for filename in os.listdir(self.music_folder):
+            file_path = os.path.join(self.music_folder, filename)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+
+        for music_file in os.listdir(self.basic_music_folder):
+            file_path = os.path.join(self.basic_music_folder, music_file)
+
+            if not pygame.mixer.get_init():
+                pygame.mixer.init()
+
+            sound = pygame.mixer.Sound(file_path)
+            self.parent().sound.append((file_path, sound))
+            shutil.copy2(file_path, self.music_folder)
+
+            self.add_music_widget(file_path, sound)
 
     def apply(self):
         """Save the changes to the json-file"""
@@ -401,12 +605,18 @@ class Settings(QDialog):
         self.parent().update_toolbar()
 
     def play_music(self, sound):
-        sound.play()
-        timer = threading.Timer(2.0, self.stop_music)
-        timer.start()
+        if self.current_timer is not None:
+            self.current_timer.cancel()
+        if self.current_music is not None:
+            self.current_music.stop()
+        
+        self.current_music = sound.play()
+        self.current_timer = threading.Timer(2.0, self.stop_music)
+        self.current_timer.start()
 
     def stop_music(self):
-        pygame.mixer.stop()
+        if self.current_music is not None:
+            self.current_music.stop()
 
 
 class IntPointlessValidator(QValidator):

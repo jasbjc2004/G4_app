@@ -1,11 +1,17 @@
+import asyncio
 import os
 import sys
 
+from qasync import QEventLoop
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # Usage of async for the gopro
+    loop = QEventLoop(app)
+    asyncio.set_event_loop(loop)
 
     pixmap = QPixmap(os.path.join((os.path.dirname(os.path.abspath(__file__))), "NEEDED/PICTURES/hands.ico"))
     splash = QSplashScreen(pixmap)
@@ -20,4 +26,5 @@ if __name__ == "__main__":
     splash.finish(startup)
     startup.show()
 
-    sys.exit(app.exec())
+    with loop:
+        sys.exit(app.exec())

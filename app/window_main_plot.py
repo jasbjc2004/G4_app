@@ -12,14 +12,16 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QMainWindow, QWidget,
     QMessageBox,
     QToolBar, QStatusBar, QTabWidget,
-    QDialog, QCheckBox, QDialogButtonBox,
+    QDialog, QCheckBox, QDialogButtonBox, QApplication,
 )
 from PySide6.QtGui import QAction, QIcon, QColor, QTextCursor, QTextCharFormat
 from PySide6.QtCore import QSize, Signal, QThread, QMutex, QWaitCondition, Qt
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
+from qasync import asyncSlot
 
 from logger import get_logbook
+from recording_gopro import GoPro
 from sensor_G4Track import initialize_system, set_units, get_active_hubs, close_sensor
 from data_processing import calculate_boxhand, calculate_position_events, \
     predict_score, Calibration
@@ -37,6 +39,9 @@ class MainWindow(QMainWindow):
                  save=None):
         super().__init__()
 
+        self.is_recording = False
+        self.thread_recording = None
+        self.gopro = None
         self.cali = None
         self.button_trigger = None
         self.logger = get_logbook('window_main_plot')
@@ -73,8 +78,8 @@ class MainWindow(QMainWindow):
         self.num_trials = num_trials
         self.notes = notes
 
-        self.thread = None
-        self.worker = None
+        self.thread_download = None
+        self.worker_download = None
         self.data_thread = ReadThread(self)
         self.data_thread.lost_connection.connect(self.data_loss)
         self.interference = False
@@ -324,9 +329,9 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        self.camera_button_action = QAction("Connect camera", self)
+        self.camera_button_action = QAction("Record", self)
         self.camera_button_action.setStatusTip("Connect camera to check the time")
-        self.camera_button_action.triggered.connect(lambda: self.camera_connect())
+        self.camera_button_action.triggered.connect(self.camera_recording)
         toolbar.addAction(self.camera_button_action)
 
         toolbar.addSeparator()
@@ -753,8 +758,64 @@ class MainWindow(QMainWindow):
         popup = ButtonTester(self)
         popup.show()
 
-    def camera_connect(self):
-        print('hello')
+    def camera_recording(self):
+        if self.gopro is None:
+            if self.participant_folder is None:
+                self.make_dir()
+            print(self.participant_folder)
+            self.gopro = GoPro(self, self.participant_folder, self.id_part)
+            self.is_recording = True
+            # Connect the signals - these will be called in the main thread
+            self.gopro.started.connect(self._on_recording_started)
+            self.gopro.stopped.connect(self._on_recording_stopped)
+            self.gopro.error.connect(self._on_error)
+            self.gopro.download_progress.connect(self._on_download_progress)
+        else:
+            self.is_recording = False
+        self.toggle_recording()
+
+    def toggle_recording(self):
+        if not self.is_recording:
+            print('Stop recording')
+            self.gopro.stop_recording()
+            self.gopro = None
+        else:
+            if self.gopro is None:
+                self.gopro = GoPro(self)
+                # Connect the signals - these will be called in the main thread
+                self.gopro.started.connect(self._on_recording_started)
+                self.gopro.stopped.connect(self._on_recording_stopped)
+                self.gopro.error.connect(self._on_error)
+                self.gopro.download_progress.connect(self._on_download_progress)
+
+            QMessageBox.information(self, "Succes", "Please make sure the gopro is in pairing mode!")
+            print('Start recording')
+            self.gopro.start_recording()
+
+    def _on_recording_started(self):
+        """Handle when recording actually starts - runs in main thread"""
+        print("Recording started signal received")
+        QMessageBox.information(self, "Success", "Recording started!")
+        self.is_recording = True
+
+    def _on_recording_stopped(self):
+        """Handle when recording stops - runs in main thread"""
+        print("Recording stopped signal received")
+        QMessageBox.information(self, "Success", "Recording stopped and video downloaded!")
+        self.is_recording = False
+        self.gopro = None  # Clean up
+
+    def _on_error(self, error_msg):
+        """Handle GoPro errors - runs in main thread"""
+        print(f"GoPro error: {error_msg}")
+        QMessageBox.critical(self, "Error", f"GoPro Error: {error_msg}")
+        self.is_recording = False
+        self.gopro = None  # Clean up
+
+    def _on_download_progress(self, message):
+        """Handle download progress messages - runs in main thread"""
+        print(f"Download progress: {message}")
+        # You could update a progress bar or status label here
 
     def disconnecting_sensors(self):
         self.is_connected = False
@@ -800,8 +861,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Info", "Started to calibrate. "
                                                   "Please wait a bit and keep the sensors at a fixed position.")
             try:
-                if READ_SAMPLE:
+                if not READ_SAMPLE:
                     self.hub_id, self.lindex, self.rindex, calibration_status = self.cali.calibration_to_center()
+                else:
+                    calibration_status = True
             except:
                 calibration_status = False
             finally:
@@ -1003,9 +1066,12 @@ class MainWindow(QMainWindow):
             self.full_close_app(event)
 
     def full_close_app(self, event):
-        if self.thread and self.thread.isRunning():
-            self.thread.quit()
-            self.thread.wait()
+        if self.thread_download and self.thread_download.isRunning():
+            self.thread_download.quit()
+            self.thread_download.wait()
+
+        if hasattr(self, 'gopro') and self.gopro is not None:
+            self.gopro.cleanup()
 
         if self.data_thread and self.data_thread.isRunning():
             self.data_thread.requestInterruption()
@@ -1018,6 +1084,7 @@ class MainWindow(QMainWindow):
             pygame.mixer.quit()
 
         event.accept()
+        QApplication.quit()
 
     def make_pdf(self):
         """
@@ -1038,25 +1105,25 @@ class MainWindow(QMainWindow):
         self.pdf.cell(0, 10, f"", ln=True)
 
     def save_excel(self, index):
-        if self.thread and self.thread.isRunning():
-            self.thread.quit()
-            self.thread.wait()
+        if self.thread_download and self.thread_download.isRunning():
+            self.thread_download.quit()
+            self.thread_download.wait()
 
         self.save_all = False
         if self.participant_folder is None:
             self.make_dir()
 
-        self.thread = QThread()
-        self.worker = DownloadThread(self, self.participant_folder, index)
-        self.worker.moveToThread(self.thread)
+        self.thread_download = QThread()
+        self.worker_download = DownloadThread(self, self.participant_folder, index)
+        self.worker_download.moveToThread(self.thread_download)
 
-        self.worker.pdf_ready_image.connect(self.add_plots_data)
-        self.worker.progress.connect(self.set_progress)
-        self.worker.finished_file.connect(self.finish_export)
-        self.worker.error_occurred.connect(self.show_error)
+        self.worker_download.pdf_ready_image.connect(self.add_plots_data)
+        self.worker_download.progress.connect(self.set_progress)
+        self.worker_download.finished_file.connect(self.finish_export)
+        self.worker_download.error_occurred.connect(self.show_error)
 
-        self.thread.started.connect(self.worker.run)
-        self.thread.start()
+        self.thread_download.started.connect(self.worker_download.run)
+        self.thread_download.start()
 
     def make_dir(self):
         self.participant_folder = os.path.join(self.save_dir, self.id_part)
@@ -1102,9 +1169,9 @@ class MainWindow(QMainWindow):
 
             self.name_pdf = self.id_part
 
-            if self.thread and self.thread.isRunning():
-                self.thread.quit()
-                self.thread.wait()
+            if self.thread_download and self.thread_download.isRunning():
+                self.thread_download.quit()
+                self.thread_download.wait()
 
             self.save_all = True
 
@@ -1112,19 +1179,19 @@ class MainWindow(QMainWindow):
                 self.make_dir()
 
             self.make_progress()
-            self.thread = QThread()
-            self.worker = DownloadThread(self, self.participant_folder, -1, self.id_part, self.pdf,
+            self.thread_download = QThread()
+            self.worker_download = DownloadThread(self, self.participant_folder, -1, self.id_part, self.pdf,
                                          [index for index in range(len(checkboxes)) if
                                              checkboxes[index].isChecked()])
-            self.worker.moveToThread(self.thread)
+            self.worker_download.moveToThread(self.thread_download)
 
-            self.worker.pdf_ready_image.connect(self.add_plots_data)
-            self.worker.progress.connect(self.set_progress)
-            self.worker.finished_file.connect(self.finish_export)
-            self.worker.error_occurred.connect(self.show_error)
+            self.worker_download.pdf_ready_image.connect(self.add_plots_data)
+            self.worker_download.progress.connect(self.set_progress)
+            self.worker_download.finished_file.connect(self.finish_export)
+            self.worker_download.error_occurred.connect(self.show_error)
 
-            self.thread.started.connect(self.worker.run)
-            self.thread.start()
+            self.thread_download.started.connect(self.worker_download.run)
+            self.thread_download.start()
 
             break
 
@@ -1220,7 +1287,7 @@ class MainWindow(QMainWindow):
             print(str(e))
         finally:
             buf.close()
-            self.worker.condition.wakeAll()
+            self.worker_download.condition.wakeAll()
 
     def make_progress(self):
         """
