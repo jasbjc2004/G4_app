@@ -8,20 +8,20 @@ import argparse
 import asyncio
 import locale
 import os
+import sys
 import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, Future
-import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from PySide6.QtCore import Signal, QObject
-from rich.console import Console
 
 from open_gopro import WiredGoPro, WirelessGoPro
 from open_gopro.models import constants, proto
 from open_gopro.util import add_cli_args_and_parse
-from open_gopro.util.logger import setup_logging
 
 import open_gopro.network.wifi.adapters.wireless as gopro_wireless
+
+from constants import NAME_APP
 
 
 def bypass_locale_check():
@@ -43,13 +43,17 @@ class GoPro(QObject):
     error = Signal(str)
     connected = Signal()
     download_progress = Signal(str)
+    time_trial_start = Signal(float)
+    request_trial_start = Signal()
 
-    def __init__(self, parent, part_folder, id):
+    def __init__(self, parent, part_folder, id_part):
         super().__init__(parent)
-        self.args = self.parse_arguments(part_folder, id)
+        self.args = self.parse_arguments(part_folder, id_part)
         self.gopro = None
         self.media_set_before = None
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self.time_start_recording = None
+        self.request_trial_start.connect(self.start_trial_timer)
 
     def start_recording(self):
         """Start the recording process - NON-ASYNC method"""
@@ -106,7 +110,7 @@ class GoPro(QObject):
                     self.error.emit("No GoPro connection to stop")
 
             finally:
-                self.loop.close()
+                self.close_loop()
 
         except Exception as e:
             self.error.emit(f"Error in stop recording: {str(e)}")
@@ -119,9 +123,18 @@ class GoPro(QObject):
             if self.args.wired:
                 self.gopro = WiredGoPro(self.args.identifier)
             else:
+                file_directory = (os.path.dirname(os.path.abspath(__file__)))
+                if getattr(sys, 'frozen', False):
+                    # Running as packaged executable
+                    log_dir = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', NAME_APP, 'logs')
+                else:
+                    # Running from source (PyCharm/development)
+                    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+
                 self.gopro = WirelessGoPro(
                     self.args.identifier,
-                    host_wifi_interface=self.args.wifi_interface
+                    host_wifi_interface=self.args.wifi_interface,
+                    cohn_db=Path(log_dir)/'cohn_db.json'
                 )
 
             await self.gopro.open()
@@ -156,9 +169,6 @@ class GoPro(QObject):
             # Set keep alive
             await self.gopro.http_command.set_keep_alive(True)
 
-            # Get current time
-            await self.gopro.http_command.get_date_time()
-
             # Start recording
             print("Starting recording...")
             shutter_response = await self.gopro.http_command.set_shutter(
@@ -168,9 +178,12 @@ class GoPro(QObject):
             if not shutter_response.ok:
                 raise Exception("Failed to start recording")
 
+            self.time_start_recording = time.perf_counter()
+
             print("Recording started successfully!")
 
         except Exception as e:
+            self.close_loop()
             error_msg = f"Error starting recording: {str(e)}"
             print(error_msg)
             raise Exception(error_msg)
@@ -269,3 +282,20 @@ class GoPro(QObject):
             help="Set to use wired (USB) instead of wireless (BLE / WIFI) interface",
         )
         return add_cli_args_and_parse(parser)
+
+    def start_trial_timer(self):
+        if self.time_start_recording:
+            start_of_trial = time.perf_counter() - self.time_start_recording
+            self.time_trial_start.emit(start_of_trial)
+
+    def close_loop(self):
+        if self.loop is not None and not self.loop.is_closed():
+            if self.loop.is_running():
+                self.loop.stop()
+
+            pending = asyncio.all_tasks(self.loop)
+            if pending:
+                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+            self.loop.close()
+

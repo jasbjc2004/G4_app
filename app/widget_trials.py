@@ -62,6 +62,8 @@ class TrailTab(QWidget):
         self.reading_active = False
         self.trial_state = TrialState.not_started
 
+        self.trial_time_start = 0
+
         self.xt = False
         self.yt = False
         self.zt = False

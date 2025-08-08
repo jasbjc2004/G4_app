@@ -31,7 +31,7 @@ from scipy import signal
 from thread_download import DownloadThread
 from thread_reading import ReadThread
 from widget_settings import manage_settings
-from constants import READ_SAMPLE
+from constants import READ_SAMPLE, TITLE_LETTER_SIZE, LETTER_SIZE
 
 
 class MainWindow(QMainWindow):
@@ -653,6 +653,8 @@ class MainWindow(QMainWindow):
         self.saved_data = False
 
         if tab is not None:
+            if self.gopro:
+                self.gopro.request_trial_start.emit()
             self.data_thread.start_tab_reading(tab)
             tab.start_reading()
             self.tab_widget.tabBar().setEnabled(False)
@@ -770,6 +772,7 @@ class MainWindow(QMainWindow):
             self.gopro.stopped.connect(self._on_recording_stopped)
             self.gopro.error.connect(self._on_error)
             self.gopro.download_progress.connect(self._on_download_progress)
+            self.gopro.time_trial_start.connect(self._start_of_trial)
         else:
             self.is_recording = False
         self.toggle_recording()
@@ -781,16 +784,15 @@ class MainWindow(QMainWindow):
             self.gopro = None
         else:
             if self.gopro is None:
-                self.gopro = GoPro(self)
-                # Connect the signals - these will be called in the main thread
-                self.gopro.started.connect(self._on_recording_started)
-                self.gopro.stopped.connect(self._on_recording_stopped)
-                self.gopro.error.connect(self._on_error)
-                self.gopro.download_progress.connect(self._on_download_progress)
+                self.camera_recording()
 
             QMessageBox.information(self, "Succes", "Please make sure the gopro is in pairing mode!")
             print('Start recording')
             self.gopro.start_recording()
+
+    def _start_of_trial(self, elapsed_time):
+        print(f'Time trial started: {elapsed_time}')
+        self.get_tab().trial_time_start = elapsed_time
 
     def _on_recording_started(self):
         """Handle when recording actually starts - runs in main thread"""
@@ -1054,16 +1056,20 @@ class MainWindow(QMainWindow):
             self.set_automatic = False
 
     def closeEvent(self, event):
-        if not self.saved_data:
-            ret = QMessageBox.warning(self, "Warning",
-                                      "Are you sure you want to quit the application? There is still unsaved data!",
-                                      QMessageBox.Yes | QMessageBox.Cancel)
-            if ret == QMessageBox.Yes:
-                self.full_close_app(event)
-            else:
-                event.ignore()
+        if self.is_recording:
+            QMessageBox.warning(self, "Warning", "Stop the recording first")
+            event.ignore()
         else:
-            self.full_close_app(event)
+            if not self.saved_data:
+                ret = QMessageBox.warning(self, "Warning",
+                                          "Are you sure you want to quit the application? There is still unsaved data!",
+                                          QMessageBox.Yes | QMessageBox.Cancel)
+                if ret == QMessageBox.Yes:
+                    self.full_close_app(event)
+                else:
+                    event.ignore()
+            else:
+                self.full_close_app(event)
 
     def full_close_app(self, event):
         if self.thread_download and self.thread_download.isRunning():
@@ -1091,16 +1097,16 @@ class MainWindow(QMainWindow):
         Make the preparation of the PDF to speed up the proces
         """
         self.pdf = fpdf.FPDF()
-        self.pdf.set_auto_page_break(auto=True, margin=15)
+        self.pdf.set_auto_page_break(auto=True, margin=10)
         self.pdf.add_page()
-        self.pdf.set_font("Arial", size=12)
+        self.pdf.set_font("Arial", size=LETTER_SIZE)
 
-        self.pdf.set_font("Arial", style="BU", size=16)
+        self.pdf.set_font("Arial", style="BU", size=TITLE_LETTER_SIZE)
         self.pdf.cell(0, 10, f"Participant {self.id_part} by assessor {self.assessor} "
                              f"on {self.date}" if self.id_part and self.assessor else
         f"Participant {self.id_part} on {self.date}" if self.id_part else
         f"Participant Unknown on {self.date}", ln=True)
-        self.pdf.set_font("Arial", size=12)
+        self.pdf.set_font("Arial", size=LETTER_SIZE)
         self.pdf.multi_cell(0, 8, self.notes if self.notes else "No Additional Notes")
         self.pdf.cell(0, 10, f"", ln=True)
 

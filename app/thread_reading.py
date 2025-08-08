@@ -1,4 +1,3 @@
-#import logging
 import math
 import random
 import time
@@ -20,14 +19,7 @@ MAX_INTERFERENCE_SPEED = manage_settings.get("General", "MAX_INTERFERENCE_SPEED"
 TIME_INTERFERENCE_SPEED = manage_settings.get("General", "TIME_INTERFERENCE_SPEED")
 
 ADD_DATA = True
-
-"""
-logging.basicConfig(
-    filename='logboek.txt',
-    level=logging.ERROR,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-"""
+SLEEP_NEEDED = True
 
 
 class ReadThread(QThread):
@@ -41,6 +33,7 @@ class ReadThread(QThread):
     def __init__(self, parent):
         super().__init__(parent)
 
+        self.first_frame = 0
         self.timer_beauty = None
         self.dongle = None
         self.tab = None
@@ -108,7 +101,7 @@ class ReadThread(QThread):
             self.HUB_ID_ARRAY[0] = main_window.hub_id
             self.dongle = main_window.dongle_id
 
-        next_time = time.perf_counter()
+        next_time = -1
 
         while not self.isInterruptionRequested():
             self._pause_mutex.lock()
@@ -121,29 +114,36 @@ class ReadThread(QThread):
             try:
                 if self.tab is not None:
                     self.read_sensor_data()
+                    if next_time == -1:
+                        next_time = time.perf_counter()
+                        timer_samples = time.perf_counter()
                 else:
                     self.keep_sensor_alive()
+                    next_time = -1
 
             except Exception as e:
                 self.logger.critical(f"Problem with reading the sensor data: {e}", exc_info=True)
-                QThread.msleep(int(0.5*1000))
+                QThread.msleep(int(0.5 * 1000))
                 next_time = time.perf_counter() + self.interval
 
-            next_time += self.interval
-            sleep_time = next_time - time.perf_counter()
-            if sleep_time > 0:
+            if next_time != -1:
+                next_time += self.interval
+                sleep_time = next_time - time.perf_counter()
+            else:
+                sleep_time = self.interval
+
+            if sleep_time > 0 and SLEEP_NEEDED:
                 time.sleep(sleep_time)
-            elif ADD_DATA and self.tab is not None and len(self.tab.xs) > 1:
+            elif ADD_DATA and (BEAUTY_SPEED or READ_SAMPLE) and self.tab is not None and len(self.tab.xs) > 1:
                 extra_time = abs(sleep_time)
                 samples_missed = math.ceil(extra_time / self.interval)
-                print(samples_missed)
                 if extra_time > self.interval:
                     last_data = [self.tab.log_left[-1], self.tab.log_right[-1]]
                     snd_last_data = [self.tab.log_left[-2], self.tab.log_right[-2]]
 
-                    diff_left = [(last-prev)/(samples_missed+1)
+                    diff_left = [(last - prev) / (samples_missed + 1)
                                  for last, prev in zip(last_data[0][:3], snd_last_data[0][:3])]
-                    diff_right = [(last-prev)/(samples_missed+1)
+                    diff_right = [(last - prev) / (samples_missed + 1)
                                   for last, prev in zip(last_data[1][:3], snd_last_data[1][:3])]
 
                     base_time = self.tab.xs[-2]
@@ -152,10 +152,12 @@ class ReadThread(QThread):
 
                         left_data = tuple([pos_i + (i + 1) * diff_i
                                            for pos_i, diff_i in zip(snd_last_data[0][0:3], diff_left)])
-                        left_data += (self.tab.speed_calculation(left_data, interpolated_time, len(self.tab.xs) - 2, True),)
+                        left_data += (
+                        self.tab.speed_calculation(left_data, interpolated_time, len(self.tab.xs) - 2, True),)
                         right_data = tuple([pos_i + (i + 1) * diff_i
-                                           for pos_i, diff_i in zip(snd_last_data[1][0:3], diff_right)])
-                        right_data += (self.tab.speed_calculation(right_data, interpolated_time, len(self.tab.xs) - 2, False),)
+                                            for pos_i, diff_i in zip(snd_last_data[1][0:3], diff_right)])
+                        right_data += (
+                        self.tab.speed_calculation(right_data, interpolated_time, len(self.tab.xs) - 2, False),)
 
                         self.tab.log_left.insert(-1, left_data)
                         self.tab.log_right.insert(-1, right_data)
@@ -203,20 +205,56 @@ class ReadThread(QThread):
                         self.tab.log_left.append((0, 0, 0, 0))
                         self.tab.log_right.append((0, 0, 0, 0))
 
-                frame_data, active_count, data_hubs = get_frame_data_with_c_list(main_window.dongle_id, self.HUB_ID_ARRAY)
+                frame_data, active_count, data_hubs = get_frame_data_with_c_list(main_window.dongle_id,
+                                                                                 self.HUB_ID_ARRAY)
 
                 if (active_count, data_hubs) != (1, 1):
                     return
 
-                time_now = len(self.tab.xs) / fs
+                if len(self.tab.xs) == 0:
+                    self.first_frame = frame_data.frame
+
+                time_now = (frame_data.frame - self.first_frame) / fs
                 pos1 = tuple(frame_data.G4_sensor_per_hub[main_window.lindex].pos)
                 pos1 = tuple([pos1[i] if i != 2 else -pos1[i] for i in range(3)])
-                v1 = self.tab.speed_calculation(pos1, time_now, len(self.tab.xs) - 1, True)
-                pos1 += (v1,)
 
                 pos2 = tuple(frame_data.G4_sensor_per_hub[main_window.rindex].pos)
                 pos2 = tuple([pos2[i] if i != 2 else -pos2[i] for i in range(3)])
+
+                if ADD_DATA and len(self.tab.xs) > 1:
+                    last_frame = round(self.tab.xs[-1] * fs)
+                    samples_missed = round(time_now * fs) - last_frame
+                    print(samples_missed)
+                    if samples_missed > 0:
+                        last_data = [self.tab.log_left[-1], self.tab.log_right[-1]]
+                        snd_last_data = [self.tab.log_left[-2], self.tab.log_right[-2]]
+
+                        diff_left = [(last - prev) / (samples_missed + 1)
+                                     for last, prev in zip(last_data[0][:3], snd_last_data[0][:3])]
+                        diff_right = [(last - prev) / (samples_missed + 1)
+                                      for last, prev in zip(last_data[1][:3], snd_last_data[1][:3])]
+
+                        base_time = self.tab.xs[-2]
+                        for i in range(0, samples_missed):
+                            interpolated_time = base_time + (i + 1) / fs
+
+                            left_data = tuple([pos_i + (i + 1) * diff_i
+                                               for pos_i, diff_i in zip(snd_last_data[0][0:3], diff_left)])
+                            left_data += (
+                                self.tab.speed_calculation(left_data, interpolated_time, len(self.tab.xs) - 2, True),)
+                            right_data = tuple([pos_i + (i + 1) * diff_i
+                                                for pos_i, diff_i in zip(snd_last_data[1][0:3], diff_right)])
+                            right_data += (
+                                self.tab.speed_calculation(right_data, interpolated_time, len(self.tab.xs) - 2, False),)
+
+                            self.tab.log_left.insert(-1, left_data)
+                            self.tab.log_right.insert(-1, right_data)
+                            self.tab.xs.insert(-1, interpolated_time)
+
+                v1 = self.tab.speed_calculation(pos1, time_now, len(self.tab.xs) - 1, True)
                 v2 = self.tab.speed_calculation(pos2, time_now, len(self.tab.xs) - 1, False)
+
+                pos1 += (v1,)
                 pos2 += (v2,)
 
                 self.tab.xs.append(len(self.tab.xs) / fs)
@@ -238,20 +276,20 @@ class ReadThread(QThread):
                 if len(self.tab.xs) == 0:
                     self.timer_beauty = time.perf_counter()
                 else:
-                    jitter = 0  # random.uniform(-self.interval, +2*self.interval)
-                    time.sleep(max(0, self.interval+jitter))
+                    jitter = random.uniform(-self.interval, +2 * self.interval)
+                    time.sleep(max(0, self.interval + jitter))
                 time_now = len(self.tab.xs) / fs
 
                 exp_time = round((time.perf_counter() - self.timer_beauty) * fs) / fs
                 if exp_time < time_now:
                     return
                 if exp_time < 5:
-                    pos1 = (0, 0, -1*exp_time,)
-                    pos2 = (0, 1*exp_time, 0,)
+                    pos1 = (0, 0, -5 * exp_time,)
+                    pos2 = (0, 5 * exp_time, 0,)
 
                 elif exp_time < 10:
-                    pos1 = (0, 0, -25+5*(exp_time-5),)
-                    pos2 = (0, 25-5*(exp_time-5), 0,)
+                    pos1 = (0, 0, -25 + 5 * (exp_time - 5),)
+                    pos2 = (0, 25 - 5 * (exp_time - 5), 0,)
 
                 elif exp_time < 15:
                     pos1 = (0, 0, -20 * (exp_time - 10),)
@@ -278,7 +316,7 @@ class ReadThread(QThread):
                 self.tab.log_right.append(pos2)
 
             else:
-                #QThread.msleep(int(1/fs * 1000))
+                # QThread.msleep(int(1/fs * 1000))
                 time_now = len(self.tab.xs) / fs
 
                 pos1 = (random.randint(-20, 20), random.randint(0, 20), random.randint(-20, 0))
@@ -316,4 +354,3 @@ class ReadThread(QThread):
                 self.lost_connection.emit()
         except:
             return
-

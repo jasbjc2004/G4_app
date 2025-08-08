@@ -6,9 +6,16 @@ from PySide6.QtCore import QThread, Signal, QMutex, QWaitCondition, Qt
 from PySide6.QtGui import QTextCursor, QColor
 from openpyxl.styles import Alignment, Font
 
-from constants import UNIMAN_PARAMS, BIMAN_PARAMS
+from constants import UNIMAN_PARAMS, BIMAN_PARAMS, LETTER_SIZE, SUBTITLE_LETTER_SIZE, SUB_SUB_TITLE_LETTER_SIZE, \
+    FONT_LETTER_SIZE
 from data_processing import calculate_extra_parameters
 from widget_settings import manage_settings
+
+
+def make_time(sec: float):
+    min = int(sec // 60)
+    sec = sec % 60
+    return f"{min:02d}:{sec:06.3f}"
 
 
 class DownloadThread(QThread):
@@ -33,6 +40,7 @@ class DownloadThread(QThread):
         """
         super().__init__()
 
+        self.gopro_time = []
         self.pdf = pdf
         self.participant_folder = part_folder
         self.checkboxes = check
@@ -82,9 +90,9 @@ class DownloadThread(QThread):
 
             if self.pdf:
                 self.pdf.add_page()
-                self.pdf.set_font("Arial", style="B", size=14)
+                self.pdf.set_font("Arial", style="B", size=SUBTITLE_LETTER_SIZE)
                 self.pdf.cell(0, 10, f"Average over all trials with score 3", ln=True)
-                self.pdf.set_font("Arial", size=12)
+                self.pdf.set_font("Arial", size=LETTER_SIZE)
 
                 self.average_events_info()
 
@@ -103,6 +111,12 @@ class DownloadThread(QThread):
         if isinstance(tab, TrailTab):
             NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
 
+            events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
+            self.gopro_time = [round(tab.xs[events[i]] + tab.trial_time_start, 3)
+                               if (tab.trial_time_start != 0 and events[i] != 0) else 0 for i in range(NUMBER_EVENTS)]
+
+            print('done making time')
+
             data = {
                 "Time (s)": tab.xs if tab.xs else [],
                 "Left Sensor x (cm)": [pos[0] for pos in tab.log_left] if tab.xs else [],
@@ -115,17 +129,22 @@ class DownloadThread(QThread):
                 "Right Sensor v (m/s)": [pos[3] for pos in tab.log_right] if tab.xs else [],
                 "Score:": [tab.get_score()] if tab.xs else [],
                 " ": [],
-                "Automatic events:": [tab.event_log[i] if tab.event_old_log[i] == 0 else tab.event_old_log[i] for i in
-                                      range(NUMBER_EVENTS)] if tab.xs else [],
-                "Manual events:": (
+                "Automatic events (/):": [tab.event_log[i] if tab.event_old_log[i] == 0 else tab.event_old_log[i] for i
+                                          in range(NUMBER_EVENTS)] if tab.xs else [],
+                "Manual events (/):": (
                     [0] * NUMBER_EVENTS if all(e == 0 for e in tab.event_old_log) else tab.event_log) if tab.xs else [],
-                "Position events:": tab.event_position if tab.xs else []
+                "Position events:": tab.event_position if tab.xs else [],
+                "": [],
+                "Events (s)": [tab.xs[tab.event_log[i]] if tab.event_old_log[i] == 0 else tab.event_old_log[i] for i in
+                               range(NUMBER_EVENTS)] if tab.xs else [],
+                "GoPro events (s):": self.gopro_time
             }
             max_length = max(len(v) for v in data.values())
             for key in data:
                 data[key].extend([None] * (max_length - len(data[key])))
             df = pd.DataFrame(data)
             trial_file = os.path.join(self.participant_folder, f"trial_{index + 1}.xlsx")
+            print('done making excel')
             if os.path.exists(trial_file):
                 os.remove(trial_file)
             with pd.ExcelWriter(trial_file) as writer:
@@ -139,7 +158,7 @@ class DownloadThread(QThread):
                     self.pdf.add_page()
                     self.y_image = self.pdf.get_y()
 
-                self.pdf.set_font("Arial", style="B", size=13)
+                self.pdf.set_font("Arial", style="B", size=SUBTITLE_LETTER_SIZE)
                 if tab.case_status in [0, 5]:
                     box_hand = 'Left'
                 elif tab.case_status in [1, 4]:
@@ -149,7 +168,7 @@ class DownloadThread(QThread):
                 self.pdf.cell(0, 10,
                               f"Trial {index + 1}:{f' score {tab.get_score()} & Box Hand: {box_hand}' if tab.xs else ''}",
                               ln=True)
-                self.pdf.set_font("Arial", size=10)
+                self.pdf.set_font("Arial", size=LETTER_SIZE)
 
                 doc = tab.notes_input.document()
                 block = doc.begin()
@@ -194,33 +213,33 @@ class DownloadThread(QThread):
                 self.pdf.ln(5)
 
                 if tab.xs:
-                    events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
+                    self.pdf.set_font("Arial", style="B", size=SUB_SUB_TITLE_LETTER_SIZE)
+                    self.pdf.cell(0, 8, 'Events', ln=True)
 
-                    self.pdf.set_font("Arial", style="B", size=11)
-                    self.pdf.cell(0, 10, 'Events', ln=True)
-
-                    col_widths = [10, 50, 20, 40, 40]
-                    self.pdf.set_font('Arial', '', 10)
+                    col_widths = [8, 38, 15, 30, 30, 35]
+                    self.pdf.set_font('Arial', '', FONT_LETTER_SIZE)
+                    if tab.trial_time_start != 0:
+                        self.pdf.cell(0, 6, f'Starting the trial at: {make_time(round(tab.trial_time_start, 3))}', ln=True)
 
                     events_table = [
-                        ['', '', 'Frame', 'Absolute time (s)', 'Relative time (s)'],
-                        ['e1', 'Start BH', events[0], round(tab.xs[events[0]], 2), 0],
+                        ['', '', 'Frame', 'Absolute time (s)', 'Relative time (s)', 'GoPro time (min:sec)'],
+                        ['e1', 'Start BH', events[0], round(tab.xs[events[0]], 2), 0, make_time(self.gopro_time[0])],
                         ['e2', 'Start box opening', events[1], round(tab.xs[events[1]], 2),
-                         round(tab.xs[events[1]] - tab.xs[events[0]], 2)],
+                         round(tab.xs[events[1]] - tab.xs[events[0]], 2), make_time(self.gopro_time[1])],
                         ['e3', 'End box opening', events[2], round(tab.xs[events[2]], 2),
-                         round(tab.xs[events[2]] - tab.xs[events[0]], 2)],
+                         round(tab.xs[events[2]] - tab.xs[events[0]], 2), make_time(self.gopro_time[2])],
                         ['e4', 'Anticipation TH', events[3], round(tab.xs[events[3]], 2),
-                         round(tab.xs[events[3]] - tab.xs[events[0]], 2)],
+                         round(tab.xs[events[3]] - tab.xs[events[0]], 2), make_time(self.gopro_time[3])],
                         ['e5', 'Start movement to trigger', events[4], round(tab.xs[events[4]], 2)
                         if tab.xs[events[3]] != tab.xs[events[4]] else '',
                          round(tab.xs[events[4]] - tab.xs[events[0]], 2)
-                         if tab.xs[events[3]] != tab.xs[events[4]] else ''],
+                         if tab.xs[events[3]] != tab.xs[events[4]] else '', make_time(self.gopro_time[4])],
                         ['e6', 'End of trial', events[5], round(tab.xs[events[5]], 2),
-                         round(tab.xs[events[5]] - tab.xs[events[0]], 2)],
+                         round(tab.xs[events[5]] - tab.xs[events[0]], 2), make_time(self.gopro_time[5])]
                     ]
                     events_table = [[str(cell) if cell != '' else '' for cell in row] for row in events_table]
 
-                    line_height = 10
+                    line_height = 8
                     self.pdf.set_fill_color(235, 235, 235)  # lichtgrijs
                     self.pdf.set_text_color(0, 0, 0)
 
@@ -232,7 +251,7 @@ class DownloadThread(QThread):
                             fill = first_row or col_ind == 0
                             align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
                             style = 'B' if first_row or col_ind == 0 else ''
-                            self.pdf.set_font("Arial", style, size=10)
+                            self.pdf.set_font("Arial", style, size=8)
                             self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
 
                         self.pdf.ln(line_height)
@@ -271,7 +290,7 @@ class DownloadThread(QThread):
                                                                                                     tab.log_left,
                                                                                                     tab.log_right)
 
-                    self.pdf.set_font("Arial", style="B", size=11)
+                    self.pdf.set_font("Arial", style="B", size=9)
                     self.pdf.cell(0, 10, 'Parameters', ln=True)
 
                     col_widths = [45, 60, 40]
@@ -296,7 +315,7 @@ class DownloadThread(QThread):
                         ['', UNIMAN_PARAMS[9], str(round(tab.extra_parameters_uni[9], 2))],
                     ]
 
-                    line_height = 10
+                    line_height = 8
                     self.pdf.set_fill_color(235, 235, 235)  # lichtgrijs
                     self.pdf.set_text_color(0, 0, 0)
 
@@ -308,7 +327,7 @@ class DownloadThread(QThread):
                             fill = first_row or col_ind == 0
                             align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
                             style = 'B' if first_row or col_ind == 0 else ''
-                            self.pdf.set_font("Arial", style, size=10)
+                            self.pdf.set_font("Arial", style, size=8)
                             self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
 
                         self.pdf.ln(line_height)
@@ -377,7 +396,7 @@ class DownloadThread(QThread):
             ['', UNIMAN_PARAMS[9], str(round(average_uni_left[9], 2)), str(round(average_uni_right[9], 2))],
         ]
 
-        line_height = 10
+        line_height = 8
         self.pdf.set_fill_color(235, 235, 235)
         self.pdf.set_text_color(0, 0, 0)
 
@@ -389,7 +408,7 @@ class DownloadThread(QThread):
                 fill = first_row or col_ind == 0
                 align = 'L' if col_ind in [0, 1] and row_ind != 0 else 'C'
                 style = 'B' if first_row or col_ind == 0 else ''
-                self.pdf.set_font("Arial", style, size=10)
+                self.pdf.set_font("Arial", style, size=LETTER_SIZE)
                 self.pdf.cell(col_widths[col_ind], line_height, datum, border=1, align=align, fill=fill)
 
             self.pdf.ln(line_height)
@@ -461,17 +480,17 @@ class DownloadThread(QThread):
                     aver_data["Unimanual"][UNIMAN_PARAMS[i]][1] += param
 
         for param in aver_data["Bimanual"]:
-            aver_data["Bimanual"][param] = [param_lr/aver_data[""]["Number of Trials"][index]
+            aver_data["Bimanual"][param] = [param_lr / aver_data[""]["Number of Trials"][index]
                                             if aver_data[""]["Number of Trials"][index] != 0 else 0
                                             for index, param_lr in enumerate(aver_data["Bimanual"][param])]
 
         for param in aver_data["Unimanual"]:
-            aver_data["Unimanual"][param] = [param_lr/aver_data[""]["Number of Trials"][index]
+            aver_data["Unimanual"][param] = [param_lr / aver_data[""]["Number of Trials"][index]
                                              if aver_data[""]["Number of Trials"][index] != 0 else 0
                                              for index, param_lr in enumerate(aver_data["Unimanual"][param])]
 
         columns_sum = pd.MultiIndex.from_tuples([(heading, sub) for heading, subdict in sum_data.items()
-                                                for sub in subdict])
+                                                 for sub in subdict])
         first_heading = next(iter(sum_data))
         first_sub = next(iter(sum_data[first_heading]))
         n_rows = len(sum_data[first_heading][first_sub])
@@ -513,8 +532,8 @@ class DownloadThread(QThread):
             level1_cell.font = bold_font
             col += 1
         for row_idx, (trial_num, row_data) in enumerate(df_sum.iterrows()):
-            excel_row = row_idx+3
-            trial_num = valid_ranges[row_idx]+1
+            excel_row = row_idx + 3
+            trial_num = valid_ranges[row_idx] + 1
             ws_summary.cell(row=excel_row, column=1, value=trial_num)
             for col_idx, value in enumerate(row_data, start=2):
                 ws_summary.cell(row=excel_row, column=col_idx, value=value)
