@@ -114,6 +114,7 @@ class DownloadThread(QThread):
             events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
             self.gopro_time = [round(tab.xs[events[i]] + tab.trial_time_start, 3)
                                if (tab.trial_time_start != 0 and events[i] != 0) else 0 for i in range(NUMBER_EVENTS)]
+            print(self.gopro_time)
 
             print('done making time')
 
@@ -137,7 +138,8 @@ class DownloadThread(QThread):
                 "": [],
                 "Events (s)": [tab.xs[tab.event_log[i]] if tab.event_old_log[i] == 0 else tab.event_old_log[i] for i in
                                range(NUMBER_EVENTS)] if tab.xs else [],
-                "GoPro events (s):": self.gopro_time
+                "GoPro events (s):": self.gopro_time,
+                "GoPro start (s)": [tab.trial_time_start],
             }
             max_length = max(len(v) for v in data.values())
             for key in data:

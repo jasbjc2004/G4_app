@@ -1,5 +1,4 @@
 import json
-# import logging
 import os
 import shutil
 import sys
@@ -20,10 +19,8 @@ invisible_style = """
                     QPushButton {
                         background-color: transparent;
                         border: none;
+                        padding-left: 2px;
                         font-size: 20px;
-                    }
-                    QPushButton:hover {
-                        color: lightgray;
                     }
                 """
 invisible_style_reset = """
@@ -31,23 +28,25 @@ invisible_style_reset = """
                                 background-color: transparent;
                                 border: none;
                             }
-                            QPushButton:hover {
-                                color: lightgray;
-                            }
                         """
 invisible_style_check = """
                             QPushButton {
                                 background-color: transparent;
-                                font-size: 20px;
-                                padding: 0px;
+                                color: transparent;
+                                font-size: 14px;
+                                font-weight: bold;
+                                padding: 0px 0px 2px 0px;
                                 margin: 0px;
-                                min-width: 0px;
+                                spacing: 0px;
+                                text-align: center;
                             }
                             QPushButton:hover {
-                                color: lightgray;
+                                color: rgba(255, 255, 255, 0.5);
+                                background-color: rgba(255, 0, 0, 0.2);
                             }
                             QPushButton:checked {
-                                color: red;
+                                background-color: red;
+                                color: white;
                             }
                         """
 
@@ -364,25 +363,27 @@ class Settings(QDialog):
             self.music_page_layout.takeAt(self.music_page_layout.count() - 1)
 
         music_layout = QHBoxLayout()
+        music_layout.setContentsMargins(5, 5, 2, 2)
+        music_layout.setSpacing(20)
 
-        var_button = QPushButton()
+        var_button = QPushButton("x")
         var_button.setStyleSheet(invisible_style_check)
         var_button.setCheckable(True)
         var_button.setFixedSize(20, 20)
-        music_layout.addWidget(var_button, alignment=Qt.AlignLeft)
-        self.del_music_button.append(var_button)
-        self.music_page_layout.addLayout(music_layout)
+        music_layout.addWidget(var_button)
+        self.del_music_button.append((var_button, music_dir, sound))
 
         var_box = QLabel(os.path.basename(music_dir))
         var_box.setFixedWidth(300)
-        var_box.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         music_layout.addWidget(var_box)
+
+        music_layout.addStretch()
 
         var_button = QPushButton("▶")
         var_button.setStyleSheet(invisible_style)
         var_button.clicked.connect(lambda checked=False, s=sound: self.play_music(s))
         var_button.setFixedWidth(40)
-        music_layout.addWidget(var_button, alignment=Qt.AlignRight)
+        music_layout.addWidget(var_button)
         self.music_page_layout.addLayout(music_layout)
 
         self.music_page_layout.addStretch()
@@ -395,6 +396,9 @@ class Settings(QDialog):
             "Audio Files (*.mp3 *.wav *.ogg *.flac)"
         )
 
+        if not music_file:
+            return
+
         if not pygame.mixer.get_init():
             pygame.mixer.init()
 
@@ -405,44 +409,47 @@ class Settings(QDialog):
         self.add_music_widget(music_file, sound)
 
     def delete_music(self):
-        selection_plot = QDialog(self)
-        selection_plot.setWindowTitle("Select music to delete")
-        layout = QVBoxLayout()
+        number_selected = 0
+        for item in self.del_music_button:
+            button, music_dir, sound = item
+            if button.isChecked():
+                number_selected += 1
 
-        checkboxes = [QCheckBox(os.path.basename(music_dir)) for music_dir in os.listdir(self.music_folder)]
-        for checkbox in checkboxes:
-            checkbox.setChecked(False)
-            layout.addWidget(checkbox)
+        if number_selected == 0:
+            return
 
-        for i in reversed(range(self.music_page_layout.count())):
-            item = self.music_page_layout.itemAt(i)
+        if number_selected == len(self.parent().sound):
+            QMessageBox.warning(self, "Warning", "It is not possible to remove all the music-files. Reset first")
+            return
 
-            if item.layout():
-                sub_layout = item.layout()
-                count = sub_layout.count()
+        ret = QMessageBox.warning(self, "Warning",
+                                  "Do you really want to delete these music-files?",
+                                  QMessageBox.Yes | QMessageBox.Cancel)
+        if ret == QMessageBox.Cancel:
+            return
 
-                if count == 0:
-                    self.music_page_layout.takeAt(i)
-                    continue
+        print(len(self.parent().sound))
 
-                last_item = sub_layout.itemAt(0)
-                widget = last_item.widget()
+        for item in self.del_music_button:
+            button, music_dir, sound = item
+            if button.isChecked():
+                self.del_music_button.remove(item)
 
-                if isinstance(widget, QPushButton) and widget.text() == 'Reset':
-                    break
+                if os.path.isfile(music_dir):
+                    os.remove(music_dir)
 
-                self.music_page_layout.takeAt(i)
+        self.reset_music(False)
+        print(self.parent().sound)
+        print(len(self.parent().sound))
 
-                while sub_layout.count():
-                    inner_item = sub_layout.takeAt(0)
-                    if inner_item.widget():
-                        inner_item.widget().setParent(None)
-                    elif inner_item.layout():
-                        print('found some layout extra')
-                    else:
-                        print('stuck')
+    def reset_music(self, full=True):
+        if full:
+            ret = QMessageBox.warning(self, "Warning",
+                                      "Do you really want to reset the music-files?",
+                                      QMessageBox.Yes | QMessageBox.Cancel)
+            if ret == QMessageBox.Cancel:
+                return
 
-    def reset_music(self):
         for i in reversed(range(self.music_page_layout.count())):
             item = self.music_page_layout.itemAt(i)
 
@@ -468,27 +475,33 @@ class Settings(QDialog):
                         inner_item.widget().setParent(None)
                     elif inner_item.layout():
                         print('found some layout extra')
-                    else:
-                        print('stuck')
 
             elif item.spacerItem() is not None:
                 self.music_page_layout.takeAt(i)
 
         self.parent().sound = []
-        for filename in os.listdir(self.music_folder):
-            file_path = os.path.join(self.music_folder, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
+        if full:
+            for filename in os.listdir(self.music_folder):
+                file_path = os.path.join(self.music_folder, filename)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
 
-        for music_file in os.listdir(self.basic_music_folder):
-            file_path = os.path.join(self.basic_music_folder, music_file)
+        if full:
+            music_folder = self.basic_music_folder
+        else:
+            music_folder = self.music_folder
+
+        for music_file in os.listdir(music_folder):
+            file_path = os.path.join(music_folder, music_file)
+            if full:
+                shutil.copy2(file_path, self.music_folder)
+                file_path = os.path.join(self.music_folder, music_file)
 
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
 
             sound = pygame.mixer.Sound(file_path)
             self.parent().sound.append((file_path, sound))
-            shutil.copy2(file_path, self.music_folder)
 
             self.add_music_widget(file_path, sound)
 
@@ -568,11 +581,15 @@ class Settings(QDialog):
                 QMessageBox.warning(self, "Error", "Failed to save settings!")
 
     def reset(self):
-        """Reset all settings to default values"""
-        reply = QMessageBox.question(self, "Reset Settings",
-                                     "Are you sure you want to reset all settings to default values?",
-                                     QMessageBox.Yes | QMessageBox.No,
-                                     QMessageBox.No)
+        """Reset all settings to default values or to the default music according to selected page"""
+        current_tab = self.list_widget.currentRow()
+
+        if current_tab == 5:
+            self.reset_music(True)
+            return
+
+        reply = QMessageBox.warning(self, "Warning", "Are you sure you want to reset all settings to default values?",
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes:
             manage_settings.create_default_settings()
@@ -609,7 +626,7 @@ class Settings(QDialog):
             self.current_timer.cancel()
         if self.current_music is not None:
             self.current_music.stop()
-        
+
         self.current_music = sound.play()
         self.current_timer = threading.Timer(2.0, self.stop_music)
         self.current_timer.start()

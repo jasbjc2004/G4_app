@@ -123,7 +123,6 @@ class GoPro(QObject):
             if self.args.wired:
                 self.gopro = WiredGoPro(self.args.identifier)
             else:
-                file_directory = (os.path.dirname(os.path.abspath(__file__)))
                 if getattr(sys, 'frozen', False):
                     # Running as packaged executable
                     log_dir = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', NAME_APP, 'logs')
@@ -144,12 +143,40 @@ class GoPro(QObject):
         except Exception as e:
             error_msg = f"Failed to connect to GoPro: {str(e)}"
             print(error_msg)
+            if self.gopro:
+                try:
+                    await self.gopro.close()
+                except:
+                    pass
             self.gopro = None
             raise Exception(error_msg)
+
+    async def _ensure_connected(self):
+        """Check if GoPro is still connected, reconnect if needed."""
+        try:
+            if self.gopro is None:
+                await self._connect_gopro_async()
+            else:
+                try:
+                    await self.gopro.http_command.get_status()
+                except Exception:
+                    print("GoPro connection lost — reconnecting...")
+                    await self.gopro.close()
+                    self.gopro = None
+                    await self._connect_gopro_async()
+        except Exception as e:
+            raise Exception(f"Unable to (re)connect to GoPro: {str(e)}")
 
     async def _start_recording_async(self):
         """Start recording"""
         try:
+            if not self.loop or self.loop.is_closed():
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
+
+            # en dan connectie forceren
+            self.loop.run_until_complete(self._ensure_connected())
+
             if not self.gopro:
                 raise Exception("GoPro not connected")
 
@@ -191,6 +218,13 @@ class GoPro(QObject):
     async def _stop_recording_async(self):
         """Stop recording and download video"""
         try:
+            if not self.loop or self.loop.is_closed():
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
+
+            # en dan connectie forceren
+            self.loop.run_until_complete(self._ensure_connected())
+
             if not self.gopro:
                 raise Exception("GoPro not connected")
 

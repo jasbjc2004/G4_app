@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
 
         nyq = 0.5 * fs
         w = fc / nyq
-        self.b, self.a = signal.butter(ORDER_FILTER, w, 'low', analog=False)
+        self.b, self.a = signal.butter(N=ORDER_FILTER, Wn=w, btype='low', output='ba', analog=False)
 
         self.pdf = None
         thread_pdf = threading.Thread(target=self.make_pdf())
@@ -489,7 +489,9 @@ class MainWindow(QMainWindow):
             if self.events_present:
                 tab.first_process = False
 
-            if trial_data.shape[1] < 13 or not self.manual_events:
+            if trial_data.shape[1] < 13 or \
+                    (self.manual_events and
+                     (trial_data.shape[1] <= 14 and not (trial_data['Position events:'].fillna(0) == 0).all())):
                 USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
 
                 if USE_NEURAL_NET:
@@ -500,6 +502,9 @@ class MainWindow(QMainWindow):
                 tab.event_position = calculate_position_events(tab.case_status)
             else:
                 tab.event_position = trial_data.iloc[:, 13].values[0:NUMBER_EVENTS].tolist()
+
+            if trial_data.shape[1] >= 18 and tab.trial_time_start == 0:
+                tab.trial_time_start = trial_data.iloc[0, 17]
         finally:
             if tab.event_log is None or len(tab.event_log) == 0:
                 tab.event_log = [0] * NUMBER_EVENTS
@@ -519,6 +524,7 @@ class MainWindow(QMainWindow):
         trial_number = 0
         in_table = False
         all_zeros = True
+        events_table = False
         for page in pdf.pages:
             pdf_content = page.get('/Contents').read_bytes().decode('utf-8')
             text = pdf_content.split('\n')
@@ -539,6 +545,7 @@ class MainWindow(QMainWindow):
 
                     elif 'Trial' in rule_text and int(rule_text.split()[1][:-1]) == trial_number + 1:
                         in_table = False
+                        events_table = False
                         trial_number += 1
 
                         tab = self.tab_widget.widget(int(trial_number) - 1)
@@ -551,8 +558,20 @@ class MainWindow(QMainWindow):
                     elif trial_number == 0:
                         continue
 
-                    elif rule_text == 'Table' or rule_text == 'Parameters' or rule_text == 'Events':
+                    elif rule_text == 'Table' or rule_text == 'Parameters':
                         in_table = True
+
+                    elif rule_text == 'Events':
+                        events_table = True
+                        in_table = True
+
+                    elif events_table and tab.trial_time_start == 0 and 'Starting the trial at:' in rule_text:
+                        time = rule_text.split(':')[1:]
+                        sec = float(time[1])
+                        min = int(time[0])
+                        print('time found')
+                        tab.trial_time_start = min*60+sec
+                        print(tab.trial_time_start)
 
                     elif rule_text == 'Average over all trials with score 3':
                         break
@@ -653,9 +672,9 @@ class MainWindow(QMainWindow):
         self.saved_data = False
 
         if tab is not None:
+            self.data_thread.start_tab_reading(tab)
             if self.gopro:
                 self.gopro.request_trial_start.emit()
-            self.data_thread.start_tab_reading(tab)
             tab.start_reading()
             self.tab_widget.tabBar().setEnabled(False)
 
@@ -975,6 +994,7 @@ class MainWindow(QMainWindow):
 
                 if isinstance(tab, TrailTab) and len(tab.xs) > 0:
                     if tab.first_process:
+                        tab.interpolate()
                         tab.process(self.b, self.a)
                         tab.first_process = False
                     tab.calculate_events((self.folder is not None), go)

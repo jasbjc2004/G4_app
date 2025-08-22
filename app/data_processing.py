@@ -1,6 +1,7 @@
 # import logging
 
 import numpy as np
+from scipy.interpolate import CubicSpline
 from scipy.signal import argrelextrema
 
 from logger import get_logbook
@@ -308,6 +309,44 @@ class Calibration:
         print(f'second phase: {diff}')
 
         return all(abs(xyz) < THRESHOLD_CALIBRATION for xyz in diff)
+
+
+def check_interpolation_needed(xs, tol=1e-5):
+    fs = manage_settings.get("Sensors", "fs")
+
+    xs = np.array(xs)
+    diffs = np.diff(xs)
+    consistent = np.all(np.abs(diffs - 1/fs) < tol)
+    return consistent
+
+
+def interpolate(xs, log_left, log_right):
+    if check_interpolation_needed(xs):
+        return [], [], []
+    fs = manage_settings.get("Sensors", "fs")
+
+    times = np.array(xs)
+    data_left = np.array(log_left)
+    coor_left = data_left[:, :3]
+    data_right = np.array(log_right)
+    coor_right = data_right[:, :3]
+
+    times_interp = np.arange(xs[0], xs[-1], 1/fs)
+    new_log_left = []
+    for dim_i in range(coor_left.shape[1]):
+        interpol_spline = CubicSpline(times, coor_left[:, dim_i])
+        interpol_coor = interpol_spline(times_interp)
+        new_log_left.append(interpol_coor)
+    new_log_left = np.stack(new_log_left, axis=1)
+
+    new_log_right = []
+    for dim_i in range(coor_right.shape[1]):
+        interpol_spline = CubicSpline(times, coor_right[:, dim_i])
+        interpol_coor = interpol_spline(times_interp)
+        new_log_right.append(interpol_coor)
+    new_log_right = np.stack(new_log_right, axis=1)
+
+    return times_interp, new_log_left, new_log_right
 
 
 def predict_score(pos_left, pos_right):

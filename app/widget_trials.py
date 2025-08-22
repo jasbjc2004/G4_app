@@ -18,7 +18,7 @@ from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from data_processing import calculate_boxhand, calculate_e6, calculate_events, calculate_extra_parameters, \
-    calculate_position_events, predict_score
+    calculate_position_events, predict_score, interpolate
 
 from scipy import signal
 
@@ -44,6 +44,14 @@ def colors_to_hex(colors):
         for (hex_c, name) in COLORS:
             if name == color: hex_colors.append(hex_c)
     return hex_colors
+
+
+def diff_speed_calculation(last, prev):
+    fs = manage_settings.get("Sensors", "fs")
+
+    return (sqrt(((last[0] - prev[0]) * fs) ** 2 +
+                 ((last[1] - prev[1]) * fs) ** 2 +
+                 ((last[2] - prev[2]) * fs) ** 2) / 100)
 
 
 class TrailTab(QWidget):
@@ -545,14 +553,7 @@ class TrailTab(QWidget):
         Implement the Butterworth filter on the speed
         """
         SPEED_FILTER = manage_settings.get("Data-processing", "SPEED_FILTER")
-        if SPEED_FILTER:
-            output_left_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_left])
-            output_right_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_right])
-            for index in range(len(self.log_left)):
-                self.log_left[index] = tuple(self.log_left[index][0:3]) + (output_left_speed[index],)
-                self.log_right[index] = tuple(self.log_right[index][0:3]) + (output_right_speed[index],)
-
-        else:
+        if not SPEED_FILTER:
             output_left_x = signal.filtfilt(b, a, [pos[0] for pos in self.log_left])
             output_left_y = signal.filtfilt(b, a, [pos[1] for pos in self.log_left])
             output_left_z = signal.filtfilt(b, a, [pos[2] for pos in self.log_left])
@@ -561,20 +562,53 @@ class TrailTab(QWidget):
             output_right_z = signal.filtfilt(b, a, [pos[2] for pos in self.log_right])
 
             for index in range(len(self.log_left)):
-                self.log_left[index][0] = output_left_x[index]
-                self.log_right[index][0] = output_right_x[index]
-                self.log_left[index][1] = output_left_y[index]
-                self.log_right[index][1] = output_right_y[index]
-                self.log_left[index][2] = output_left_z[index]
-                self.log_right[index][2] = output_right_z[index]
+                lpos = (output_left_x[index], output_left_y[index], output_left_z[index])
+                rpos = (output_right_x[index], output_right_y[index], output_right_z[index])
 
                 if index > 0:
-                    lpos = (self.log_left[index][0], self.log_left[index][1], self.log_left[index][2])
-                    rpos = (self.log_right[index][0], self.log_right[index][1], self.log_right[index][2])
-                    self.log_left[index][3] = self.speed_calculation(lpos, self.xs[index], index, True)
-                    self.log_right[index][3] = self.speed_calculation(rpos, self.xs[index], index, False)
+                    lpos += (self.speed_calculation(lpos, self.xs[index], index-1, True),)
+                    rpos += (self.speed_calculation(rpos, self.xs[index], index-1, False),)
+                else:
+                    lpos += (0, )
+                    rpos += (0, )
+
+                self.log_left[index] = lpos
+                self.log_right[index] = rpos
+
+        output_left_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_left])
+        output_right_speed = signal.filtfilt(b, a, [pos[3] for pos in self.log_right])
+        for index in range(len(self.log_left)):
+            self.log_left[index] = tuple(self.log_left[index][0:3]) + (output_left_speed[index],)
+            self.log_right[index] = tuple(self.log_right[index][0:3]) + (output_right_speed[index],)
 
         self.update_plot(True)
+
+    def interpolate(self):
+        new_time, new_left, new_right = interpolate(self.xs, self.log_left, self.log_right)
+        if len(new_left) == 0:
+            return
+
+        new_coor_left = []
+        new_coor_right = []
+        for index in range(len(new_left)):
+            lpos = tuple(new_left[index])
+            rpos = tuple(new_right[index])
+
+            if index > 0:
+                lpos += (diff_speed_calculation(lpos, tuple(new_left[index-1])),)
+                rpos += (diff_speed_calculation(rpos, tuple(new_right[index-1])),)
+            else:
+                lpos += (0,)
+                rpos += (0,)
+
+            new_coor_left.append(lpos)
+            new_coor_right.append(rpos)
+
+        print(len(new_time), len(new_coor_left), len(new_coor_right))
+
+        self.xs = new_time.tolist()
+        self.log_left = new_coor_left
+        self.log_right = new_coor_right
 
     def update_plot(self, redraw=False, parent=None):
         if redraw or (self.reading_active and self.trial_state == TrialState.running):
@@ -785,20 +819,20 @@ class TrailTab(QWidget):
             self.scatter.append(self.ax.scatter(x_positions[i], y_positions[i],
                                     c=colors_hex[i], label=LABEL_EVENT[i], s=32, zorder=15-i, picker=True))
 
-    def speed_calculation(self, vector, time_val, index, left):
-        fs = manage_settings.get("Sensors", "fs")
-
+    def speed_calculation(self, vector, time_now, index, left):
         if len(self.xs) <= 1 or len(self.log_right) <= 1 or len(self.log_left) <= 1:
             return 0
 
-        if left:
-            return (sqrt(((vector[0] - self.log_left[index - 1][0]) * fs) ** 2 +
-                         ((vector[1] - self.log_left[index - 1][1]) * fs) ** 2 +
-                         ((vector[2] - self.log_left[index - 1][2]) * fs) ** 2) / 100)
+        time = time_now - self.xs[index]
 
-        return (sqrt(((vector[0] - self.log_right[index - 1][0]) * fs) ** 2 +
-                     ((vector[1] - self.log_right[index - 1][1]) * fs) ** 2 +
-                     ((vector[2] - self.log_right[index - 1][2]) * fs) ** 2) / 100)
+        if left:
+            return (sqrt(((vector[0] - self.log_left[index][0]) / time) ** 2 +
+                         ((vector[1] - self.log_left[index][1]) / time) ** 2 +
+                         ((vector[2] - self.log_left[index][2]) / time) ** 2) / 100)
+
+        return (sqrt(((vector[0] - self.log_right[index][0]) / time) ** 2 +
+                     ((vector[1] - self.log_right[index][1]) / time) ** 2 +
+                     ((vector[2] - self.log_right[index][2]) / time) ** 2) / 100)
 
     def get_score(self):
         return self.score.currentIndex()

@@ -7,7 +7,7 @@
         "TIME_INTERFERENCE_SPEED": 0.3
     },
     "Calibration": {
-        "LONG_CALIBRATION": false,
+        "LONG_CALIBRATION": true,
         "POSITION_BUTTON": [
             0,
             15.2,
@@ -27,7 +27,7 @@
         "MAX_ATTEMPTS_CONNECT": 10
     },
     "Data-processing": {
-        "ORDER_FILTER": 3,
+        "ORDER_FILTER": 2,
         "ORDER_EXTREMA": 10,
         "SPEED_FILTER": true,
         "MAX_HEIGHT_NEEDED": 2,

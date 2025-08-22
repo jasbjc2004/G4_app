@@ -18,7 +18,7 @@ SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
 MAX_INTERFERENCE_SPEED = manage_settings.get("General", "MAX_INTERFERENCE_SPEED")
 TIME_INTERFERENCE_SPEED = manage_settings.get("General", "TIME_INTERFERENCE_SPEED")
 
-ADD_DATA = True
+ADD_DATA = False
 SLEEP_NEEDED = True
 
 
@@ -215,41 +215,49 @@ class ReadThread(QThread):
                     self.first_frame = frame_data.frame
 
                 time_now = (frame_data.frame - self.first_frame) / fs
+
+                if len(self.tab.xs) > 1:
+                    last_frame = round(self.tab.xs[-1] * fs)
+                    samples_missed = round(time_now * fs) - (last_frame + 1)
+                    if samples_missed > 0: print(samples_missed)
+                else:
+                    samples_missed = 1
+
+                if samples_missed < 0:
+                    return
+
                 pos1 = tuple(frame_data.G4_sensor_per_hub[main_window.lindex].pos)
                 pos1 = tuple([pos1[i] if i != 2 else -pos1[i] for i in range(3)])
 
                 pos2 = tuple(frame_data.G4_sensor_per_hub[main_window.rindex].pos)
                 pos2 = tuple([pos2[i] if i != 2 else -pos2[i] for i in range(3)])
 
-                if ADD_DATA and len(self.tab.xs) > 1:
-                    last_frame = round(self.tab.xs[-1] * fs)
-                    samples_missed = round(time_now * fs) - last_frame
+                if ADD_DATA and len(self.tab.xs) > 1 and samples_missed > 0:
                     print(samples_missed)
-                    if samples_missed > 0:
-                        last_data = [self.tab.log_left[-1], self.tab.log_right[-1]]
-                        snd_last_data = [self.tab.log_left[-2], self.tab.log_right[-2]]
+                    last_data = [self.tab.log_left[-1], self.tab.log_right[-1]]
+                    snd_last_data = [self.tab.log_left[-2], self.tab.log_right[-2]]
 
-                        diff_left = [(last - prev) / (samples_missed + 1)
-                                     for last, prev in zip(last_data[0][:3], snd_last_data[0][:3])]
-                        diff_right = [(last - prev) / (samples_missed + 1)
-                                      for last, prev in zip(last_data[1][:3], snd_last_data[1][:3])]
+                    diff_left = [(last - prev) / (samples_missed + 1)
+                                 for last, prev in zip(last_data[0][:3], snd_last_data[0][:3])]
+                    diff_right = [(last - prev) / (samples_missed + 1)
+                                  for last, prev in zip(last_data[1][:3], snd_last_data[1][:3])]
 
-                        base_time = self.tab.xs[-2]
-                        for i in range(0, samples_missed):
-                            interpolated_time = base_time + (i + 1) / fs
+                    base_time = self.tab.xs[-2]
+                    for i in range(0, samples_missed):
+                        interpolated_time = base_time + (i + 1) / fs
 
-                            left_data = tuple([pos_i + (i + 1) * diff_i
-                                               for pos_i, diff_i in zip(snd_last_data[0][0:3], diff_left)])
-                            left_data += (
-                                self.tab.speed_calculation(left_data, interpolated_time, len(self.tab.xs) - 2, True),)
-                            right_data = tuple([pos_i + (i + 1) * diff_i
-                                                for pos_i, diff_i in zip(snd_last_data[1][0:3], diff_right)])
-                            right_data += (
-                                self.tab.speed_calculation(right_data, interpolated_time, len(self.tab.xs) - 2, False),)
+                        left_data = tuple([pos_i + (i + 1) * diff_i
+                                           for pos_i, diff_i in zip(snd_last_data[0][0:3], diff_left)])
+                        left_data += (
+                            self.tab.speed_calculation(left_data, interpolated_time, len(self.tab.xs) - 2, True),)
+                        right_data = tuple([pos_i + (i + 1) * diff_i
+                                            for pos_i, diff_i in zip(snd_last_data[1][0:3], diff_right)])
+                        right_data += (
+                            self.tab.speed_calculation(right_data, interpolated_time, len(self.tab.xs) - 2, False),)
 
-                            self.tab.log_left.insert(-1, left_data)
-                            self.tab.log_right.insert(-1, right_data)
-                            self.tab.xs.insert(-1, interpolated_time)
+                        self.tab.log_left.append(left_data)
+                        self.tab.log_right.append(right_data)
+                        self.tab.xs.append(interpolated_time)
 
                 v1 = self.tab.speed_calculation(pos1, time_now, len(self.tab.xs) - 1, True)
                 v2 = self.tab.speed_calculation(pos2, time_now, len(self.tab.xs) - 1, False)
@@ -257,7 +265,7 @@ class ReadThread(QThread):
                 pos1 += (v1,)
                 pos2 += (v2,)
 
-                self.tab.xs.append(len(self.tab.xs) / fs)
+                self.tab.xs.append(time_now)
                 self.tab.log_left.append(pos1)
                 self.tab.log_right.append(pos2)
                 """
