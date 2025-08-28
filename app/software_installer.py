@@ -77,7 +77,6 @@ def main():
     if os.path.exists(spec_file):
         os.remove(spec_file)
 
-
     input("All files deleted, press enter to continue")
 
     main_script = "main.py"
@@ -106,6 +105,17 @@ def main():
                     continue
 
     needed_music = os.path.join(current_dir, 'NEEDED', 'MUSIC')
+    if os.path.exists(needed_music):
+        for filename in os.listdir(needed_music):
+            file_path = os.path.join(needed_music, filename)
+            if not os.path.isdir(file_path):
+                try:
+                    extra_files.append(file_path.replace(current_dir, '.').replace('\\', '/'))
+                except:
+                    print(f"Error: failed to get info from: {file_path}!")
+                    continue
+
+    needed_music = os.path.join(current_dir, 'NEEDED', 'BASIC_MUSIC')
     if os.path.exists(needed_music):
         for filename in os.listdir(needed_music):
             file_path = os.path.join(needed_music, filename)

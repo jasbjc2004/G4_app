@@ -45,13 +45,17 @@ class GoPro(QObject):
     download_progress = Signal(str)
     time_trial_start = Signal(float)
     request_trial_start = Signal()
+    status_checked = Signal(bool)       # let the main window know if the gopro is connected
 
     def __init__(self, parent, part_folder, id_part):
         super().__init__(parent)
+        self.connected_flag = False
         self.args = self.parse_arguments(part_folder, id_part)
         self.gopro = None
         self.media_set_before = None
         self._executor = ThreadPoolExecutor(max_workers=1)
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
         self.time_start_recording = None
         self.request_trial_start.connect(self.start_trial_timer)
 
@@ -64,6 +68,7 @@ class GoPro(QObject):
             # The signals will notify when done
 
         except Exception as e:
+            self.connected_flag = False
             self.error.emit(f"Error starting recording thread: {str(e)}")
 
     def stop_recording(self):
@@ -74,28 +79,19 @@ class GoPro(QObject):
             # Don't wait for result - let it run in background
 
         except Exception as e:
+            self.connected_flag = False
             self.error.emit(f"Error stopping recording thread: {str(e)}")
 
     def _start_recording_sync(self):
         """Synchronous wrapper for start recording - runs in thread"""
         try:
-            # Create new event loop for this thread
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-
-            # Connect if needed
-            if self.gopro is None:
-                self.loop.run_until_complete(self._connect_gopro_async())
-
             # Start recording
-            if self.gopro is not None:
-                self.loop.run_until_complete(self._start_recording_async())
-                # Emit signal - this is thread-safe in Qt
-                self.started.emit()
-            else:
-                self.error.emit("Failed to connect to GoPro")
+            self.loop.run_until_complete(self._start_recording_async())
+            # Emit signal - this is thread-safe in Qt
+            self.started.emit()
 
         except Exception as e:
+            self.connected_flag = False
             self.error.emit(f"Error in start recording: {str(e)}")
 
     def _stop_recording_sync(self):
@@ -108,14 +104,14 @@ class GoPro(QObject):
                     self.stopped.emit()
                 else:
                     self.error.emit("No GoPro connection to stop")
-
-            finally:
-                self.close_loop()
+            except:
+                pass
 
         except Exception as e:
+            self.connected_flag = False
             self.error.emit(f"Error in stop recording: {str(e)}")
 
-    async def _connect_gopro_async(self):
+    async def _connect_gopro_async(self, reconnect=False):
         """Connect to the GoPro device"""
         try:
             print("Connecting to GoPro...")
@@ -136,56 +132,46 @@ class GoPro(QObject):
                     cohn_db=Path(log_dir)/'cohn_db.json'
                 )
 
-            await self.gopro.open()
+            await self.gopro.open(timeout=5, retries=3)
             print("Connected to GoPro successfully")
-            self.connected.emit()  # Thread-safe signal emission
+            if not reconnect:
+                self.connected.emit()  # Thread-safe signal emission
+            self.connected_flag = True
 
         except Exception as e:
             error_msg = f"Failed to connect to GoPro: {str(e)}"
             print(error_msg)
-            if self.gopro:
-                try:
-                    await self.gopro.close()
-                except:
-                    pass
-            self.gopro = None
+            self.connected_flag = False
             raise Exception(error_msg)
-
-    async def _ensure_connected(self):
-        """Check if GoPro is still connected, reconnect if needed."""
-        try:
-            if self.gopro is None:
-                await self._connect_gopro_async()
-            else:
-                try:
-                    await self.gopro.http_command.get_status()
-                except Exception:
-                    print("GoPro connection lost — reconnecting...")
-                    await self.gopro.close()
-                    self.gopro = None
-                    await self._connect_gopro_async()
-        except Exception as e:
-            raise Exception(f"Unable to (re)connect to GoPro: {str(e)}")
 
     async def _start_recording_async(self):
         """Start recording"""
         try:
-            if not self.loop or self.loop.is_closed():
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
-
-            # en dan connectie forceren
-            self.loop.run_until_complete(self._ensure_connected())
+            if not self.gopro or not (self.gopro.is_ble_connected or self.gopro.is_http_connected):
+                await self._connect_gopro_async(reconnect=True)
 
             if not self.gopro:
                 raise Exception("GoPro not connected")
 
             print("Setting up recording...")
 
-            # Load video preset
-            response = await self.gopro.http_command.load_preset_group(
-                group=proto.EnumPresetGroup.PRESET_GROUP_ID_VIDEO
-            )
+            try:
+                # Load video preset
+                response = await asyncio.wait_for(self.gopro.http_command.load_preset_group(
+                            group=proto.EnumPresetGroup.PRESET_GROUP_ID_VIDEO
+                            ),
+                            timeout=4
+                )
+            except:
+                if not self.gopro or not (self.gopro.is_ble_connected or self.gopro.is_http_connected):
+                    await asyncio.wait_for(self._connect_gopro_async(reconnect=True), timeout=4)
+
+                response = await asyncio.wait_for(self.gopro.http_command.load_preset_group(
+                            group=proto.EnumPresetGroup.PRESET_GROUP_ID_VIDEO
+                            ),
+                            timeout=4
+                )
+
             if not response.ok:
                 raise Exception("Failed to load video preset")
 
@@ -212,28 +198,32 @@ class GoPro(QObject):
         except Exception as e:
             self.close_loop()
             error_msg = f"Error starting recording: {str(e)}"
+            self.connected_flag = False
             print(error_msg)
             raise Exception(error_msg)
 
     async def _stop_recording_async(self):
         """Stop recording and download video"""
         try:
-            if not self.loop or self.loop.is_closed():
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
-
-            # en dan connectie forceren
-            self.loop.run_until_complete(self._ensure_connected())
-
-            if not self.gopro:
-                raise Exception("GoPro not connected")
-
             print("Stopping recording...")
 
-            # Stop recording
-            shutter_response = await self.gopro.http_command.set_shutter(
-                shutter=constants.Toggle.DISABLE
-            )
+            try:
+                # Stop recording
+                shutter_response = await asyncio.wait_for(self.gopro.http_command.set_shutter(
+                            shutter=constants.Toggle.DISABLE
+                        ),
+                        timeout=4
+                )
+            except:
+                if not self.gopro or not (self.gopro.is_ble_connected or self.gopro.is_http_connected):
+                    await asyncio.wait_for(self._connect_gopro_async(reconnect=True), timeout=4)
+
+                # Stop recording
+                shutter_response = await asyncio.wait_for(self.gopro.http_command.set_shutter(
+                            shutter=constants.Toggle.DISABLE
+                        ),
+                        timeout=4
+                )
 
             print('stopped recording')
 
@@ -276,28 +266,36 @@ class GoPro(QObject):
             else:
                 print("No new video files found")
 
-            # Close the connection
-            if self.gopro:
-                await self.gopro.close()
-                self.gopro = None
-
             print("Recording stopped and downloaded successfully")
 
         except Exception as e:
             error_msg = f"Error stopping recording: {str(e)}"
+            self.connected_flag = False
             print(error_msg)
-            # Still try to close the connection
-            if self.gopro:
-                try:
-                    await self.gopro.close()
-                except:
-                    pass
-                self.gopro = None
             raise Exception(error_msg)
 
     def cleanup(self):
         """Clean up resources"""
-        self._executor.shutdown(wait=True)
+        print('here cleaning')
+        if self.gopro:
+            if self.loop and not self.loop.is_closed():
+                try:
+                    self.loop.run_until_complete(self._safe_close_gopro())
+                except Exception as e:
+                    print(f"Error closing GoPro: {e}")
+            self.gopro = None
+
+        if self._executor:
+            self._executor.shutdown(wait=True)
+        self.close_loop()
+
+    async def _safe_close_gopro(self):
+        """Awaitable safe close, ignore disconnects"""
+        try:
+            if self.gopro:
+                await self.gopro.close()
+        except Exception as e:
+            print(f"Ignored error during close: {e}")
 
     def parse_arguments(self, part_folder, id) -> argparse.Namespace:
         parser = argparse.ArgumentParser(description="Connect to a GoPro camera, take a video, then download it.")
@@ -323,13 +321,19 @@ class GoPro(QObject):
             self.time_trial_start.emit(start_of_trial)
 
     def close_loop(self):
-        if self.loop is not None and not self.loop.is_closed():
-            if self.loop.is_running():
-                self.loop.stop()
+        print('closing')
+        if self.loop and not self.loop.is_closed():
+            tasks = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
+            for task in tasks:
+                task.cancel()
 
-            pending = asyncio.all_tasks(self.loop)
-            if pending:
-                self.loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            try:
+                self.loop.run_until_complete(
+                    asyncio.gather(*tasks, return_exceptions=True)
+                )
+                self.loop.run_until_complete(self.loop.shutdown_asyncgens())
+            except:
+                pass
 
             self.loop.close()
-
+            self.loop = None

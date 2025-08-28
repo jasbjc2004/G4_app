@@ -41,7 +41,7 @@ class MainWindow(QMainWindow):
 
         self.is_recording = False
         self.thread_recording = None
-        self.gopro = None
+
         self.cali = None
         self.button_trigger = None
         self.logger = get_logbook('window_main_plot')
@@ -85,6 +85,9 @@ class MainWindow(QMainWindow):
         self.interference = False
         self.data_thread.interference.connect(self.data_loss)
         self.data_thread.done_reading.connect(self.interference_message)
+
+        self.gopro = None
+        self.connecting_gopro = False
 
         self.sound = sound
         self.participant_folder = None
@@ -780,32 +783,33 @@ class MainWindow(QMainWindow):
         popup.show()
 
     def camera_recording(self):
-        if self.gopro is None:
-            if self.participant_folder is None:
-                self.make_dir()
+        if self.participant_folder is None:
+            self.make_dir()
             print(self.participant_folder)
+
+        if self.gopro is None:
             self.gopro = GoPro(self, self.participant_folder, self.id_part)
-            self.is_recording = True
+            self.connecting_gopro = True
             # Connect the signals - these will be called in the main thread
             self.gopro.started.connect(self._on_recording_started)
             self.gopro.stopped.connect(self._on_recording_stopped)
             self.gopro.error.connect(self._on_error)
             self.gopro.download_progress.connect(self._on_download_progress)
             self.gopro.time_trial_start.connect(self._start_of_trial)
-        else:
-            self.is_recording = False
-        self.toggle_recording()
+
+        if not self.connecting_gopro:
+            self.toggle_recording()
+            return
+
+        QMessageBox.information(self, "Success", "Please make sure the GoPro is in pairing mode!")
+        print('Start recording')
+        self.gopro.start_recording()
 
     def toggle_recording(self):
-        if not self.is_recording:
+        if self.is_recording:
             print('Stop recording')
             self.gopro.stop_recording()
-            self.gopro = None
         else:
-            if self.gopro is None:
-                self.camera_recording()
-
-            QMessageBox.information(self, "Succes", "Please make sure the gopro is in pairing mode!")
             print('Start recording')
             self.gopro.start_recording()
 
@@ -816,22 +820,21 @@ class MainWindow(QMainWindow):
     def _on_recording_started(self):
         """Handle when recording actually starts - runs in main thread"""
         print("Recording started signal received")
-        QMessageBox.information(self, "Success", "Recording started!")
         self.is_recording = True
+        self.connecting_gopro = False
+        QMessageBox.information(self, "Success", "Recording started!")
 
     def _on_recording_stopped(self):
         """Handle when recording stops - runs in main thread"""
         print("Recording stopped signal received")
         QMessageBox.information(self, "Success", "Recording stopped and video downloaded!")
         self.is_recording = False
-        self.gopro = None  # Clean up
 
     def _on_error(self, error_msg):
         """Handle GoPro errors - runs in main thread"""
         print(f"GoPro error: {error_msg}")
         QMessageBox.critical(self, "Error", f"GoPro Error: {error_msg}")
         self.is_recording = False
-        self.gopro = None  # Clean up
 
     def _on_download_progress(self, message):
         """Handle download progress messages - runs in main thread"""
@@ -1096,7 +1099,7 @@ class MainWindow(QMainWindow):
             self.thread_download.quit()
             self.thread_download.wait()
 
-        if hasattr(self, 'gopro') and self.gopro is not None:
+        if self.gopro:
             self.gopro.cleanup()
 
         if self.data_thread and self.data_thread.isRunning():
