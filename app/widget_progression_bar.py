@@ -8,10 +8,10 @@ from PySide6.QtCore import Qt, QTimer
 
 
 class ProgressionBar(QDialog):
-    """
-    Show a progress bar when downloading a file
-    """
     def __init__(self, parent=None):
+        """
+        Show a progress bar when downloading a file or another task
+        """
         super().__init__(parent)
         file_directory = (os.path.dirname(os.path.abspath(__file__)))
         dir_icon = os.path.join(file_directory, 'NEEDED/PICTURES/hands.ico')

@@ -26,6 +26,11 @@ def extract_excel_for_nn(file):
 
 
 def padding_input(samples_in, length):
+    """
+    Make all the samples of the same length
+    :param samples_in:
+    :param length:
+    """
     NUMBER_DOF = 8          # 3 coordinates and speed of each hand
     number_samples = len(length)
 
@@ -40,6 +45,9 @@ def padding_input(samples_in, length):
 
 
 def main():
+    """
+    Make a neural net out of the folder "TRAINING_DATA"
+    """
     folder = "TRAINING_DATA"
 
     x = []
@@ -88,5 +96,6 @@ def main():
     print(f"Final validation loss: {history.history['val_loss'][-1]:.4f}")
     print(f"Final training MAE: {history.history['mae'][-1]:.4f}")
     print(f"Final validation MAE: {history.history['val_mae'][-1]:.4f}")
+
 
 main()

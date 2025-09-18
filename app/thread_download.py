@@ -13,16 +13,17 @@ from widget_settings import manage_settings
 
 
 def make_time(sec: float):
-    min = int(sec // 60)
+    """
+    Convert a certain amount of seconds to the 'min:sec'-format
+    :param sec:
+    :return:
+    """
+    minit = int(sec // 60)
     sec = sec % 60
-    return f"{min:02d}:{sec:06.3f}"
+    return f"{minit:02d}:{sec:06.3f}"
 
 
 class DownloadThread(QThread):
-    """
-    Makes it possible to have a progression bar and exports all calculation to a separate thread
-    Needed to let the mainthread handle all the relavant windows and updating of plot (otherwise not possible)
-    """
     progress = Signal(int)
     pdf_ready_image = Signal(int, list, list, list, list, list, tuple)
     finished_file = Signal()
@@ -30,13 +31,15 @@ class DownloadThread(QThread):
 
     def __init__(self, parent, part_folder, index=-1, id=None, pdf=None, check=None):
         """
-
-        :param parent:
+        Download all the information of the participant to both PDF and Excel, or only one Excel (if index is -1)
+        Makes it possible to have a progression bar and exports all calculation to a separate thread
+        Needed to let the mainthread handle all the relavant windows and updating of plot (otherwise not possible)
+        :param parent: parent window to collect the data
         :type parent: MainWindow
-        :param part_folder:
-        :param index:
-        :param pdf:
-        :param check:
+        :param part_folder: participant folder to save the data
+        :param index: which trial to download (if index is not -1), otherwise download all info
+        :param pdf: the PDF to write the information to
+        :param check: all the necessary plots that need to be added to the PDF
         """
         super().__init__()
 
@@ -67,6 +70,10 @@ class DownloadThread(QThread):
         self.index = index
 
     def count_active_tabs(self):
+        """
+        Count all the active tabs, with data
+        :rtype: int
+        """
         from widget_trials import TrailTab
 
         counter_active = 0
@@ -104,6 +111,9 @@ class DownloadThread(QThread):
             self.error_occurred.emit(str(e))
 
     def export_tab(self, index):
+        """
+        Export the information of trial at the corresponding index
+        """
         from widget_trials import TrailTab
 
         tab = self.main.tab_widget.widget(index)
@@ -113,7 +123,8 @@ class DownloadThread(QThread):
 
             events = [ei if ei is not None else 0 for ei in tab.event_log[0:NUMBER_EVENTS]]
             self.gopro_time = [round(tab.xs[events[i]] + tab.trial_time_start, 3)
-                               if (tab.trial_time_start != 0 and events[i] != 0) else 0 for i in range(NUMBER_EVENTS)]
+                               if (tab.trial_time_start != 0 and events[i] != 0) else
+                               round(tab.trial_time_start, 3) for i in range(NUMBER_EVENTS)]
             print(self.gopro_time)
 
             print('done making time')
@@ -416,6 +427,10 @@ class DownloadThread(QThread):
             self.pdf.ln(line_height)
 
     def final_excel(self):
+        """
+        Make a summary out of all the data, contains the events and bimanual and unimanual parameters
+        :return:
+        """
         LABEL_EVENT = manage_settings.get("Events", "LABEL_EVENT")
 
         range_index = list(range(self.total_num_trials)) if self.index == -1 else [self.index]
@@ -596,3 +611,4 @@ class DownloadThread(QThread):
             ws_average.cell(row=1, column=start_col).alignment = Alignment(horizontal='center')
 
         wb.save(trial_file)
+

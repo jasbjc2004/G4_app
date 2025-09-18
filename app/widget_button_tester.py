@@ -11,10 +11,10 @@ from PySide6.QtCore import Qt, QTimer
 
 
 class ButtonTester(QDialog):
-    """
-    Check the connection with the button
-    """
     def __init__(self, parent=None):
+        """
+        Check the connection with the button
+        """
         super().__init__(parent)
         self.setWindowTitle("Button tester")
         file_directory = (os.path.dirname(os.path.abspath(__file__)))

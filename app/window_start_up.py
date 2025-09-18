@@ -90,6 +90,10 @@ class StartUp(QDialog):
         self.progression.show()
 
     def finish(self):
+        """
+        Finishing of the comparison between patients.
+        :return:
+        """
         if self.progression:
             self.progression.set_progress(100)
 
@@ -112,7 +116,7 @@ class StartUp(QDialog):
 
 class CompareWorker(QThread):
     """
-    Thread to read the data when plotting the data --> possible to get 120 Hz without letting the program wait
+    Thread to compare the patients --> possible to update the progress bar without freezing the program
     """
     progression = Signal(int)
     done = Signal()
@@ -132,6 +136,14 @@ class CompareWorker(QThread):
             self.error.emit(str(e))
 
     def add_patient_data(self, file, data_dict, aver_data, trials):
+        """
+        Add all necessary data of the patients trial to the dict
+        :param file: the file containing the data of the patient
+        :param data_dict: dict containing data of the patient
+        :param aver_data: dict containing average of all the patient
+        :param trials: list of the trials of a patient
+        :return:
+        """
         trial_data = pd.read_excel(file)
         trial_number = file.name.split('.')[-2].split('_')[-1]
         NUMBER_EVENTS = manage_settings.get("Events", "NUMBER_EVENTS")
@@ -287,6 +299,13 @@ class CompareWorker(QThread):
             ws_average.cell(row=1, column=start_col).alignment = Alignment(horizontal='center')
 
     def add_data_sum(self, part_code, valid_ranges, sum_data, wb):
+        """
+        Add all the data to the Excel of a single participant
+        :param part_code: the participant code
+        :param valid_ranges: all the trials used in documents of a single participant
+        :param sum_data: all the data of the participant
+        :param wb: needed to add data to the Excel
+        """
         columns_sum = pd.MultiIndex.from_tuples([(heading, sub) for heading, subdict in sum_data.items()
                                                  for sub in subdict])
         first_heading = next(iter(sum_data))
@@ -337,6 +356,9 @@ class CompareWorker(QThread):
             ws_summary.cell(row=1, column=start_col).alignment = Alignment(horizontal='center')
 
     def search_dir(self, folder):
+        """
+        Search inside the folder for all necessary files
+        """
         compare_file = os.path.join(folder, f"Compare_patients.xlsx")
         if os.path.exists(compare_file):
             os.remove(compare_file)

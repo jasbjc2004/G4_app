@@ -21,11 +21,11 @@ MAX_TRIALS = manage_settings.get("General", "MAX_TRIALS")
 
 
 class SetUp(QDialog):
-    """
-    Window to add all the important data and load all the music in advance when user is filling in data
-    """
-
     def __init__(self, folder=None):
+        """
+        Window to add all the important data and load all the music in advance when user is filling in data
+        :param folder: the folder where the old data is located
+        """
         super().__init__()
 
         self.setWindowTitle("Setup")
@@ -182,6 +182,10 @@ class SetUp(QDialog):
             t.join()
 
     def browse_dir(self):
+        """
+        Search for a new dir with the file explorer
+        :return:
+        """
         path_text = self.path.text()
 
         folder = QFileDialog.getExistingDirectory(

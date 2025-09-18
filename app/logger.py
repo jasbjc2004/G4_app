@@ -10,9 +10,9 @@ def get_logbook(name='Unknown'):
     """
     Define a logger and log the error (or other info) with the name
     Usage:
-    from logger import get_logger
-    logger = get_logger(py-file)
-    logger.debug("Loading main window")
+        from logger import get_logger
+        logger = get_logger(py-file)
+        logger.debug("Loading main window")
     """
 
     logger = logging.getLogger(name)

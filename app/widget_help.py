@@ -8,10 +8,10 @@ from PySide6.QtCore import Qt
 
 
 class Help(QDialog):
-    """
-    creates a window to check the short help widget
-    """
     def __init__(self, parent=None):
+        """
+        creates a window to check the short help widget
+        """
         super().__init__(parent)
         self.setWindowTitle("Help")
         file_directory = (os.path.dirname(os.path.abspath(__file__)))

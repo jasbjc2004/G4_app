@@ -10,10 +10,10 @@ from PySide6.QtCore import Qt
 
 
 class Manual(QDialog):
-    """
-    creates a window to check the use manual inside the program
-    """
     def __init__(self, parent=None):
+        """
+        creates a window to check the use manual inside the program
+        """
         super().__init__(parent)
         self.setWindowTitle("Manual")
         file_directory = (os.path.dirname(os.path.abspath(__file__)))

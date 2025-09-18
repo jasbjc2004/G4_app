@@ -39,6 +39,11 @@ class TrialState(Enum):
 
 
 def colors_to_hex(colors):
+    """
+    Convert strings into heximal color codes
+    :param colors: list of strings with the colors
+    :return: a list of heximal color codes
+    """
     hex_colors = []
     for color in colors:
         for (hex_c, name) in COLORS:
@@ -47,6 +52,10 @@ def colors_to_hex(colors):
 
 
 def diff_speed_calculation(last, prev):
+    """
+    Calculate the speed using the fs as timestamp and the two coordinates
+    :return: the speed
+    """
     fs = manage_settings.get("Sensors", "fs")
 
     return (sqrt(((last[0] - prev[0]) * fs) ** 2 +
@@ -154,6 +163,10 @@ class TrailTab(QWidget):
         self.timer_plot.setInterval(50)
 
     def signal_text_changed(self):
+        """
+        Needed to have a decent save-warning when the text is altered
+        :return:
+        """
         main_window = self.window()
         if isinstance(main_window, MainWindow):
             main_window.signal_text_changed()
@@ -475,6 +488,10 @@ class TrailTab(QWidget):
                 main_window.update_toolbar()
 
     def remove_added_text(self):
+        """
+        Remove the red text (added by the program)
+        :return:
+        """
         doc = self.notes_input.document()
         block = doc.begin()
         end_text = 0
@@ -550,7 +567,7 @@ class TrailTab(QWidget):
 
     def process(self, b, a):
         """
-        Implement the Butterworth filter on the speed
+        Implement the Butterworth filter on the speed (and the coordinates if needed)
         """
         SPEED_FILTER = manage_settings.get("Data-processing", "SPEED_FILTER")
         if not SPEED_FILTER:
@@ -584,6 +601,9 @@ class TrailTab(QWidget):
         self.update_plot(True)
 
     def interpolate(self):
+        """
+        Add extra samples to the trial if needed (both time and coordinates) and change the corresponding data
+        """
         new_time, new_left, new_right = interpolate(self.xs, self.log_left, self.log_right)
         if len(new_left) == 0:
             return
@@ -611,6 +631,10 @@ class TrailTab(QWidget):
         self.log_right = new_coor_right
 
     def update_plot(self, redraw=False, parent=None):
+        """
+        :param redraw: make sure not to play music (if set to False)
+        :param parent: needed if the program hasn't fully started
+        """
         if redraw or (self.reading_active and self.trial_state == TrialState.running):
             if parent:
                 main_window = parent
@@ -820,6 +844,15 @@ class TrailTab(QWidget):
                                     c=colors_hex[i], label=LABEL_EVENT[i], s=32, zorder=15-i, picker=True))
 
     def speed_calculation(self, vector, time_now, index, left):
+        """
+        Calculate the speed
+        :param vector: the coordinates
+        :param time_now: current time
+        :param index: index where the coordinates need to stand (to look at the previous coordinates)
+        :param left: Look at the left (True) or right (False) data
+        :type left: bool
+        :return:
+        """
         if len(self.xs) <= 1 or len(self.log_right) <= 1 or len(self.log_left) <= 1:
             return 0
 

@@ -23,14 +23,14 @@ SLEEP_NEEDED = True
 
 
 class ReadThread(QThread):
-    """
-    Thread to read the data when plotting the data --> possible to get 120 Hz without letting the program wait
-    """
     lost_connection = Signal()
     interference = Signal()
     done_reading = Signal()
 
     def __init__(self, parent):
+        """
+        Thread to read the data when plotting the data --> possible to get 120 Hz without letting the program wait
+        """
         super().__init__(parent)
 
         self.first_frame = 0

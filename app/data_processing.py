@@ -12,28 +12,19 @@ from scipy.spatial.transform import Rotation as R
 
 from tensorflow import keras
 
-"""
-All functions needed for the data processing and calibration
-"""
-
-"""
-logging.basicConfig(
-    filename='logboek.txt',
-    level=logging.ERROR,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-"""
-
-# USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
-
+# Load the neural net
 file_directory = (os.path.dirname(os.path.abspath(__file__)))
 model_dir = os.path.join(file_directory, 'scoring_model.keras')
 model = keras.models.load_model(model_dir)
-
+# Load the logger
 logger = get_logbook('data_processing')
 
 
 class Calibration:
+    """
+    Class needed to calibrate. All the functions are bundled together to make it move variabels between them and to
+    have grouping of all the functions.
+    """
     def __init__(self, sys_id):
         """
         :param sys_id: system id
@@ -51,6 +42,7 @@ class Calibration:
         """
         Calibrate the system (facing the source), so the x-axis points to the right of the user, the y-axis to the front
         and the z-axis to the floor. Keep in mind that the hemisphere of the source is dynamic and needs time to adapt.
+        USED ONLY = LESS PRECISE
         :return: the sensor who is on the left and right hand
         :rtype: int, int, int, bool
         """
@@ -119,6 +111,8 @@ class Calibration:
         Calibrate the orientation system (facing the source) using the sensor, so the x-axis points to the right of
         the user, the y-axis to the front and the z-axis to the floor. Keep in mind that the hemisphere of the
         source is dynamic and needs time to adapt.
+        :param phase: Distinct the different parts of the function to collect different points
+        :type phase: int
         """
         frame_reference_orientation_reset(self.sys_id)
         time.sleep(0.5)
@@ -279,8 +273,9 @@ class Calibration:
 
     def calibration_to_button_second_phase(self):
         """
-        Calibrate the system (facing the source) using the sensor, so the x-axis points to the right of the user, the y-axis to the front
-        and the z-axis to the floor. Keep in mind that the hemisphere of the source is dynamic and needs time to adapt.
+        Calibrate the system (facing the source) using the sensor, so the x-axis points to the right of the user, the
+        y-axis to the front and the z-axis to the floor. Keep in mind that the hemisphere of the source is dynamic
+        and needs time to adapt. It is used as validation.
         :return: a boolean to check if the second calibration worked
         :rtype: bool
         """
@@ -312,6 +307,12 @@ class Calibration:
 
 
 def check_interpolation_needed(xs, tol=1e-5):
+    """
+    Check the data and look if there are gaps between the time larger than tol
+    :param xs: the list of all timestamps of the trial
+    :param tol: accepted difference
+    :return: a boolean to check if interpolation is needed
+    """
     fs = manage_settings.get("Sensors", "fs")
 
     xs = np.array(xs)
@@ -321,6 +322,14 @@ def check_interpolation_needed(xs, tol=1e-5):
 
 
 def interpolate(xs, log_left, log_right):
+    """
+    Add extra samples so the fs-rate is guaranteed. Using a spline interpolation to match the smoothness of the
+    functions.
+    :param xs: list of all the timestamps of the trial
+    :param log_left: list of all the coordinates and speed left of the trial
+    :param log_right: list of all the coordinates and speed right of the trial
+    :return: the new timestamps (at a rate of fs) and the new coordinates !!!only coordinates, not speed
+    """
     if check_interpolation_needed(xs):
         return [], [], []
     fs = manage_settings.get("Sensors", "fs")
@@ -350,6 +359,13 @@ def interpolate(xs, log_left, log_right):
 
 
 def predict_score(pos_left, pos_right):
+    """
+    Predict the score using a neural network
+    :param pos_left: list of all the coordinates and speed left of the trial
+    :param pos_right: list of all the coordinates and speed right of the trial
+    :return: the score
+    :rtype: int
+    """
     left_hand = np.array(pos_left)
     right_hand = np.array(pos_right)
     hands = np.concatenate([left_hand, right_hand], axis=1)
@@ -364,6 +380,7 @@ def predict_score(pos_left, pos_right):
 
     print(prediction[0][0])
     print(round(prediction[0][0]))
+    # small change to better align with the actual data, some were falsely set to 2
     return round(prediction[0][0]) if prediction[0][0] < 2.46 else 3
 
 
@@ -372,7 +389,7 @@ def calculate_boxhand(pos_left, pos_right, score=-1):
     Calculate the case of the movement
     :param pos_left: list of coordinates of the left hand
     :param pos_right: list of coordinates of the right hand
-    :param score: Score according to neural net
+    :param score: Score according to neural net, -1 if not used
     :returns:
         0 if the left hand is the box hand,
         1 if the right hand is the box hand
@@ -507,7 +524,7 @@ def calculate_events(pos_left, pos_right, case, score):
     MAX_HEIGHT_NEEDED = manage_settings.get("Data-processing", "MAX_HEIGHT_NEEDED")
     MAX_LENGTH_NEEDED = manage_settings.get("Data-processing", "MAX_LENGTH_NEEDED")
     SPEED_THRESHOLD = manage_settings.get("Data-processing", "SPEED_THRESHOLD")
-    USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
+    # USE_NEURAL_NET = manage_settings.get("General", "USE_NEURAL_NET")
     fs = manage_settings.get("Sensors", "fs")
 
     if case == 0 or case == 2 or case == 7:

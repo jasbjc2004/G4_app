@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QHBoxLa
 from constants import COLORS, NAME_APP
 from logger import get_logbook
 
+# Styles for the buttons in settings
 invisible_style = """
                     QPushButton {
                         background-color: transparent;
@@ -52,9 +53,8 @@ invisible_style_check = """
 
 
 class SettingsManager:
-    """Class to manage all the settings: loading at the beginning, applying changes and resetting to default"""
-
     def __init__(self, config_file='constants.json'):
+        """Class to manage all the settings: loading at the beginning, applying changes and resetting to default"""
         if getattr(sys, 'frozen', False):
             # Running as packaged executable
             appdata_dir = os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming', NAME_APP)
@@ -160,11 +160,10 @@ manage_settings = SettingsManager()
 
 
 class Settings(QDialog):
-    """
-    Settings to change the constant values
-    """
-
     def __init__(self, parent=None):
+        """
+        Settings to change the constant values
+        """
         super().__init__(parent)
         self.setWindowTitle("Settings")
         file_directory = (os.path.dirname(os.path.abspath(__file__)))
@@ -358,6 +357,11 @@ class Settings(QDialog):
         self.setLayout(layout)
 
     def add_music_widget(self, music_dir, sound):
+        """
+        Add the widget so every one has the same lay-out
+        :param music_dir: the dir of the music file
+        :param sound: the sound made with pygame
+        """
         item = self.music_page_layout.itemAt(self.music_page_layout.count() - 1)
         if item.spacerItem() is not None:
             self.music_page_layout.takeAt(self.music_page_layout.count() - 1)
@@ -389,6 +393,9 @@ class Settings(QDialog):
         self.music_page_layout.addStretch()
 
     def add_music(self):
+        """
+        Add music to the list, so this one is played with the press of the button
+        """
         music_file, _ = QFileDialog.getOpenFileName(
             self,
             "Select a Music File",
@@ -409,6 +416,10 @@ class Settings(QDialog):
         self.add_music_widget(music_file, sound)
 
     def delete_music(self):
+        """
+        Delete the selected music out of the list, so this one isn't playes anymore. This is using the checkboxes in
+        front of the text/ music
+        """
         number_selected = 0
         for item in self.del_music_button:
             button, music_dir, sound = item
@@ -443,6 +454,11 @@ class Settings(QDialog):
         print(len(self.parent().sound))
 
     def reset_music(self, full=True):
+        """
+        if full is True: Delete all the music and upload the basic ones again. Else: reset the lay-out
+        of the settings-menu
+        :param full: a parameter to delete all (True) or just update the lay-out (False)
+        """
         if full:
             ret = QMessageBox.warning(self, "Warning",
                                       "Do you really want to reset the music-files?",
@@ -622,6 +638,10 @@ class Settings(QDialog):
         self.parent().update_toolbar()
 
     def play_music(self, sound):
+        """
+        Play the music of the sound, as a sample
+        :param sound: the sound of pygame
+        """
         if self.current_timer is not None:
             self.current_timer.cancel()
         if self.current_music is not None:
@@ -636,14 +656,24 @@ class Settings(QDialog):
             self.current_music.stop()
 
 
+# Extra validators to ensure the right values are set in the settings
 class IntPointlessValidator(QValidator):
     def __init__(self, pattern, min_val, max_val):
+        """
+        Make sure the user doesn't add a point to the int-value
+        :param pattern: the tokens that can be used
+        :param min_val: minimum value
+        :param max_val: maximum value
+        """
         super().__init__()
         self.regex = QRegularExpression(pattern)
         self.min_val = min_val
         self.max_val = max_val
 
     def validate(self, input_str: str, pos: int) -> object:
+        """
+        Check if the string in correct or not
+        """
         if input_str == "":
             return QValidator.Intermediate, input_str, pos
 
@@ -667,12 +697,21 @@ class IntPointlessValidator(QValidator):
 
 class SinglePointDoubleValidator(QDoubleValidator):
     def __init__(self, min_val, max_val, decimals):
+        """
+        Make sure there is only one point and the value can also start with a point
+        :param min_val: minimum value
+        :param max_val: maximum value
+        :param decimals: numbers of decimals permitted
+        """
         super().__init__(min_val, max_val, decimals)
         self.min_val = min_val
         self.max_val = max_val
         self.decimals = decimals
 
     def validate(self, input_str, pos):
+        """
+        Check if the string in correct or not
+        """
         if input_str == "":
             return QValidator.Intermediate, input_str, pos
 
@@ -724,6 +763,9 @@ class SinglePointDoubleValidator(QDoubleValidator):
 
 class DistinctColorComboBox(QComboBox):
     def __init__(self):
+        """
+        Make a color box with colors inside of them, so it gives a better visual effect
+        """
         super().__init__()
 
         colors = COLORS

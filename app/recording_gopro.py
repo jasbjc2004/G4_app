@@ -48,6 +48,12 @@ class GoPro(QObject):
     status_checked = Signal(bool)       # let the main window know if the gopro is connected
 
     def __init__(self, parent, part_folder, id_part):
+        """
+        The camera connection of the program
+        :param parent:
+        :param part_folder: folder to drop the data
+        :param id_part: participants ID
+        """
         super().__init__(parent)
         self.connected_flag = False
         self.args = self.parse_arguments(part_folder, id_part)
@@ -298,6 +304,12 @@ class GoPro(QObject):
             print(f"Ignored error during close: {e}")
 
     def parse_arguments(self, part_folder, id) -> argparse.Namespace:
+        """
+
+        :param part_folder: needed to put the video inside and to check if the dir is already
+        :param id: needed to name the video
+        :return:
+        """
         parser = argparse.ArgumentParser(description="Connect to a GoPro camera, take a video, then download it.")
         parser.add_argument("-r", "--record_time", type=float, help="How long to record for", default=10.0)
         Path(part_folder).mkdir(parents=True, exist_ok=True)
@@ -316,11 +328,18 @@ class GoPro(QObject):
         return add_cli_args_and_parse(parser)
 
     def start_trial_timer(self):
+        """
+        Get the current time
+        :return: the time of the GoPro
+        """
         if self.time_start_recording:
             start_of_trial = time.perf_counter() - self.time_start_recording
             self.time_trial_start.emit(start_of_trial)
 
     def close_loop(self):
+        """
+        Close the async loop and all parts of it
+        """
         print('closing')
         if self.loop and not self.loop.is_closed():
             tasks = [t for t in asyncio.all_tasks(self.loop) if not t.done()]

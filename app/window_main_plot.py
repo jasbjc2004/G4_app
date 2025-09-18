@@ -14,11 +14,10 @@ from PySide6.QtWidgets import (
     QToolBar, QStatusBar, QTabWidget,
     QDialog, QCheckBox, QDialogButtonBox, QApplication,
 )
-from PySide6.QtGui import QAction, QIcon, QColor, QTextCursor, QTextCharFormat
-from PySide6.QtCore import QSize, Signal, QThread, QMutex, QWaitCondition, Qt
+from PySide6.QtGui import QAction, QIcon, QColor, QTextCharFormat
+from PySide6.QtCore import QSize, QThread, Qt
 from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
-from qasync import asyncSlot
 
 from logger import get_logbook
 from recording_gopro import GoPro
@@ -37,6 +36,19 @@ from constants import READ_SAMPLE, TITLE_LETTER_SIZE, LETTER_SIZE
 class MainWindow(QMainWindow):
     def __init__(self, id, asses, date, num_trials, notes, sound=None, folder=None, neg_z=False, manual=False,
                  save=None):
+        """
+        Create the main window of the program, divided into different tabs to plot all the trials
+        :param id: the participant ID
+        :param asses: the assessor
+        :param date: the date of the trial
+        :param num_trials:
+        :param notes: the extra notes of the setup-window
+        :param sound: all the sounds of the music (played when the participant presses the button)
+        :param folder: the output folder (where all data is saved and must be collected)
+        :param neg_z: flip the z-coordinates of the saved data if necessary
+        :param manual: use the manual events of the files
+        :param save: the directory where the data needs to be saved
+        """
         super().__init__()
 
         self.is_recording = False
@@ -298,6 +310,9 @@ class MainWindow(QMainWindow):
         popup.show()
 
     def setup_toolbar(self):
+        """
+        Set-up of the top menu (toolbar)
+        """
         SERIAL_BUTTON = manage_settings.get("General", "SERIAL_BUTTON")
 
         toolbar = QToolBar("My main toolbar")
@@ -371,6 +386,9 @@ class MainWindow(QMainWindow):
         toolbar.addAction(quit_action)
 
     def setup_statusbar(self):
+        """
+        Set-up of the bottom visuals (statusbar)
+        """
         from widget_status_connect import StatusWidget
 
         self.statusbar = QStatusBar(self)
@@ -591,6 +609,9 @@ class MainWindow(QMainWindow):
         return all_zeros
 
     def get_tab(self):
+        """
+        Get the currect tab visible on the main window (plot that is shown at the moment)
+        """
         from widget_trials import TrailTab
 
         tab = self.tab_widget.currentWidget()
@@ -599,6 +620,9 @@ class MainWindow(QMainWindow):
         return None
 
     def get_tab_score(self):
+        """
+        Get the scores of all the tabs
+        """
         from widget_trials import TrailTab
 
         scores = []
@@ -705,6 +729,10 @@ class MainWindow(QMainWindow):
                 self.update_toolbar()
 
     def signal_text_changed(self):
+        """
+        After checking if there are any changes made to the notes-tab
+        :return:
+        """
         self.saved_data = False
 
     def switch_to_next_tab(self):
@@ -783,6 +811,9 @@ class MainWindow(QMainWindow):
         popup.show()
 
     def camera_recording(self):
+        """
+        Make connection to the GoPro camera and stop the recording (if already recording)
+        """
         if self.participant_folder is None:
             self.make_dir()
             print(self.participant_folder)
@@ -814,6 +845,11 @@ class MainWindow(QMainWindow):
             self.gopro.start_recording()
 
     def _start_of_trial(self, elapsed_time):
+        """
+        Signal to get the time a trial started (from recording_gopro.py)
+        :param elapsed_time: the
+        :return:
+        """
         print(f'Time trial started: {elapsed_time}')
         self.get_tab().trial_time_start = elapsed_time
 
@@ -1013,6 +1049,10 @@ class MainWindow(QMainWindow):
         self.get_tab().update_plot(True)
 
     def set_negz(self):
+        """
+        Switch the symbol of the z-axis of all trials (if necessary)
+        :return:
+        """
         from widget_trials import TrailTab
 
         for i in range(self.tab_widget.count()):
@@ -1033,8 +1073,7 @@ class MainWindow(QMainWindow):
     def switch_hands(self, show_no_error=False):
         """
         Check if hands are inverted in the proces after calibration
-        :param show_no_error:
-        :return:
+        :param show_no_error: boolean to disable any error messages (if trials are not changed)
         """
         from widget_trials import TrailTab
 
@@ -1095,6 +1134,9 @@ class MainWindow(QMainWindow):
                 self.full_close_app(event)
 
     def full_close_app(self, event):
+        """
+        Close all threads and other connections
+        """
         if self.thread_download and self.thread_download.isRunning():
             self.thread_download.quit()
             self.thread_download.wait()
@@ -1134,6 +1176,11 @@ class MainWindow(QMainWindow):
         self.pdf.cell(0, 10, f"", ln=True)
 
     def save_excel(self, index):
+        """
+        Make an Excel of the given index trial using a thread (used to auto-save the trials)
+        :param index: trial index
+        :return:
+        """
         if self.thread_download and self.thread_download.isRunning():
             self.thread_download.quit()
             self.thread_download.wait()
@@ -1155,6 +1202,10 @@ class MainWindow(QMainWindow):
         self.thread_download.start()
 
     def make_dir(self):
+        """
+        Make the participant folder (and add an index if it already exists)
+        :return:
+        """
         self.participant_folder = os.path.join(self.save_dir, self.id_part)
 
         counter = 0
@@ -1338,7 +1389,6 @@ class MainWindow(QMainWindow):
         """
         Upload the PDF to the right directory
         """
-
         if self.save_all:
             pdf_file = os.path.join(self.participant_folder, f"{self.name_pdf}.pdf")
             try:
